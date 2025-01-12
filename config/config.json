@@ -1,0 +1,11 @@
+{
+    "mqtt": {
+        "broker": "tcp://haos.int.stone-age.io:1883",
+        "clientId": "mqtt-mux-router",
+        "username": "mqttrouter",
+        "password": "mqttrouter",
+        "tls": {
+            "enable": false 
+        }
+    }
+}

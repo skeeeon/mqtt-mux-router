@@ -1,0 +1,14 @@
+[
+    {
+        "topic": "sensors/temperature",
+        "condition": {
+            "field": "temperature",
+            "operator": "gt",
+            "value": 30
+        },
+        "action": {
+            "topic": "alerts/temperature",
+            "payload": "{\"alert\":\"High temperature detected!\",\"value\":${temperature}}"
+        }
+    }
+]
