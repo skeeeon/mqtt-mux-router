@@ -16,6 +16,6 @@
         "compress": true,
         "logToFile": true,
         "logToStdout": true,
-        "level": "info"
+        "level": "debug"
     }
 }
