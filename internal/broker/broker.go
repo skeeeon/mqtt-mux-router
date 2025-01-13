@@ -31,7 +31,32 @@ func NewBroker(cfg *config.Config, log *logger.Logger) (*Broker, error) {
 		SetCleanSession(true).
 		SetAutoReconnect(true)
 
+	// Add connect and disconnect handlers for debugging
+	opts.OnConnect = func(client mqtt.Client) {
+		log.Debug("mqtt client connected successfully",
+			"broker", cfg.MQTT.Broker,
+			"clientId", cfg.MQTT.ClientID)
+	}
+
+	opts.OnConnectionLost = func(client mqtt.Client, err error) {
+		log.Debug("mqtt connection lost",
+			"broker", cfg.MQTT.Broker,
+			"clientId", cfg.MQTT.ClientID,
+			"error", err)
+	}
+
+	opts.OnReconnecting = func(client mqtt.Client, opts *mqtt.ClientOptions) {
+		log.Debug("mqtt client attempting to reconnect",
+			"broker", cfg.MQTT.Broker,
+			"clientId", cfg.MQTT.ClientID)
+	}
+
 	if cfg.MQTT.TLS.Enable {
+		log.Debug("configuring tls for mqtt connection",
+			"certFile", cfg.MQTT.TLS.CertFile,
+			"keyFile", cfg.MQTT.TLS.KeyFile,
+			"caFile", cfg.MQTT.TLS.CAFile)
+
 		tlsConfig, err := newTLSConfig(cfg.MQTT.TLS.CertFile, cfg.MQTT.TLS.KeyFile, cfg.MQTT.TLS.CAFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TLS config: %w", err)
@@ -39,7 +64,15 @@ func NewBroker(cfg *config.Config, log *logger.Logger) (*Broker, error) {
 		opts.SetTLSConfig(tlsConfig)
 	}
 
+	log.Debug("creating mqtt client",
+		"broker", cfg.MQTT.Broker,
+		"clientId", cfg.MQTT.ClientID,
+		"username", cfg.MQTT.Username,
+		"tlsEnabled", cfg.MQTT.TLS.Enable)
+
 	client := mqtt.NewClient(opts)
+
+	log.Debug("attempting mqtt connection", "broker", cfg.MQTT.Broker)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		return nil, fmt.Errorf("failed to connect to broker: %w", token.Error())
 	}
@@ -52,9 +85,14 @@ func NewBroker(cfg *config.Config, log *logger.Logger) (*Broker, error) {
 }
 
 func (b *Broker) Start(ctx context.Context, processor *rule.Processor) error {
+	b.logger.Debug("starting mqtt broker service")
+	
 	// Subscribe to all topics from rules
 	topics := processor.GetTopics()
+	b.logger.Debug("subscribing to topics", "count", len(topics), "topics", topics)
+	
 	for _, topic := range topics {
+		b.logger.Debug("subscribing to topic", "topic", topic)
 		if token := b.client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
 			b.handleMessage(processor, msg)
 		}); token.Wait() && token.Error() != nil {
@@ -67,24 +105,44 @@ func (b *Broker) Start(ctx context.Context, processor *rule.Processor) error {
 }
 
 func (b *Broker) handleMessage(processor *rule.Processor, msg mqtt.Message) {
-	b.logger.Debug("received message", "topic", msg.Topic(), "payload", string(msg.Payload()))
+	b.logger.Debug("received message",
+		"topic", msg.Topic(),
+		"payload", string(msg.Payload()),
+		"qos", msg.Qos(),
+		"retained", msg.Retained(),
+		"messageId", msg.MessageID())
 
 	actions, err := processor.Process(msg.Topic(), msg.Payload())
 	if err != nil {
-		b.logger.Error("failed to process message", "error", err)
+		b.logger.Error("failed to process message",
+			"error", err,
+			"topic", msg.Topic(),
+			"payload", string(msg.Payload()))
 		return
 	}
 
 	for _, action := range actions {
+		b.logger.Debug("publishing action",
+			"sourceTopic", msg.Topic(),
+			"targetTopic", action.Topic,
+			"payload", string(action.Payload))
+
 		if token := b.client.Publish(action.Topic, 0, false, action.Payload); token.Wait() && token.Error() != nil {
-			b.logger.Error("failed to publish message", "error", token.Error())
+			b.logger.Error("failed to publish message",
+				"error", token.Error(),
+				"topic", action.Topic)
+		} else {
+			b.logger.Debug("successfully published message",
+				"topic", action.Topic,
+				"payload", string(action.Payload))
 		}
-		b.logger.Debug("published message", "topic", action.Topic, "payload", string(action.Payload))
 	}
 }
 
 func (b *Broker) Close() {
+	b.logger.Debug("disconnecting mqtt client")
 	b.client.Disconnect(250)
+	b.logger.Info("mqtt client disconnected")
 }
 
 func newTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
@@ -107,4 +165,31 @@ func newTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		RootCAs:     caCertPool,
 	}, nil
+}
+
+// File: internal/rule/types.go
+package rule
+
+type Rule struct {
+	Topic      string       `json:"topic"`
+	Conditions *Conditions  `json:"conditions"`
+	Action     *Action      `json:"action"`
+}
+
+// Conditions represents a group of conditions with a logical operator
+type Conditions struct {
+	Operator string      `json:"operator"` // "and" or "or"
+	Items    []Condition `json:"items"`
+	Groups   []Conditions `json:"groups,omitempty"` // For nested condition groups
+}
+
+type Condition struct {
+	Field    string      `json:"field"`
+	Operator string      `json:"operator"`
+	Value    interface{} `json:"value"`
+}
+
+type Action struct {
+	Topic   string `json:"topic"`
+	Payload string `json:"payload"`
 }

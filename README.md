@@ -5,15 +5,23 @@ A powerful and flexible MQTT message router that processes messages from subscri
 ## Features
 
 - 🔐 TLS support with client certificates
-- 📝 JSON-based configuration
-- 🔄 Automatic reconnection handling
 - 📝 Dynamic message templating with nested path support
 - 📋 Configurable logging with rotation and multiple outputs
-- 📋 Rule-based message processing
-- 🎯 Complex condition evaluation (AND/OR logic)
-- 📊 Structured JSON logging
-- 📁 Recursive rule file loading
-- 🚀 High performance message processing
+- 🔄 Automatic reconnection handling
+- 🎯 Complex condition evaluation with AND/OR logic
+- 📊 Structured JSON logging with detailed debug information
+
+## Table of Contents
+- [Installation](#installation)
+- [Configuration](#configuration)
+  - [MQTT Settings](#mqtt-settings)
+  - [Logging Configuration](#logging-configuration)
+- [Rules](#rules)
+  - [Rule Structure](#rule-structure)
+  - [Condition Operators](#condition-operators)
+  - [Message Templating](#message-templating)
+- [Monitoring and Debugging](#monitoring-and-debugging)
+- [Deployment](#deployment)
 
 ## Installation
 
@@ -36,9 +44,9 @@ go build -o mqtt-mux-router ./cmd/mqtt-mux-router
 
 ## Configuration
 
-### MQTT Broker Settings
+### MQTT Settings
 
-Create a `config.json` file:
+Configure MQTT connection settings in `config.json`:
 
 ```json
 {
@@ -53,59 +61,13 @@ Create a `config.json` file:
             "keyFile": "certs/client-key.pem",
             "caFile": "certs/ca.pem"
         }
-    },
-    "logging": {
-        "directory": "/var/log/mqtt-mux-router",
-        "maxSize": 10,
-        "maxAge": 7,
-        "maxBackups": 5,
-        "compress": true,
-        "logToFile": true,
-        "logToStdout": true,
-        "level": "info"
     }
 }
 ```
 
-### Rule Configuration
-
-Rules are defined in JSON files within the rules directory. Each rule specifies:
-- Topic to subscribe to
-- Conditions to evaluate
-- Action to take when conditions are met
-
-Example rule file (`rules/example.json`):
-
-```json
-[
-    {
-        "topic": "sensors/temperature",
-        "conditions": {
-            "operator": "and",
-            "items": [
-                {
-                    "field": "temperature",
-                    "operator": "gt",
-                    "value": 30
-                },
-                {
-                    "field": "humidity",
-                    "operator": "gt",
-                    "value": 70
-                }
-            ]
-        },
-        "action": {
-            "topic": "alerts/temperature",
-            "payload": "{\"alert\":\"High temperature and humidity!\",\"temp\":${temperature}}"
-        }
-    }
-]
-```
-
 ### Logging Configuration
 
-The MQTT Mux Router supports comprehensive logging configuration with features like log rotation, multiple outputs, and different log levels. Configure logging in the `config.json` file:
+Configure logging behavior in the same `config.json`:
 
 ```json
 {
@@ -135,78 +97,32 @@ The MQTT Mux Router supports comprehensive logging configuration with features l
 | `logToStdout` | Enable stdout logging | true |
 | `level` | Log level (debug, info, warn, error) | info |
 
-#### Log Rotation
+## Rules
 
-The router automatically handles log rotation based on:
-- File size (maxSize)
-- File age (maxAge)
-- Number of backups (maxBackups)
+Rules define how messages are processed and routed. Each rule consists of a subscription topic, conditions for evaluation, and an action to perform when conditions are met.
 
-Rotated files can optionally be compressed to save space.
+### Rule Structure
 
-#### Log Levels
-
-- `debug`: Detailed information for debugging
-- `info`: General operational information
-- `warn`: Warning messages for potential issues
-- `error`: Error messages for serious problems
-
-#### Log Format
-
-Logs are output in JSON format for easy parsing:
-
+Basic rule structure:
 ```json
 {
-    "time": "2024-01-12T10:00:00Z",
-    "level": "INFO",
-    "msg": "connected to mqtt broker",
-    "broker": "ssl://mqtt.example.com:8883"
+    "topic": "topic/to/subscribe",
+    "conditions": {
+        "operator": "and|or",
+        "items": [...conditions...],
+        "groups": [...nested condition groups...]
+    },
+    "action": {
+        "topic": "topic/to/publish",
+        "payload": "message template"
+    }
 }
 ```
 
-### Message Templating
+### Rule Examples
 
-The MQTT Mux Router supports dynamic message templating, allowing you to use values from input messages in your output messages. The template system supports both simple key-value replacements and nested JSON paths.
-
-### Template Syntax
-- Use `${key}` to insert a simple value
-- Use `${path.to.value}` for nested values
-- Templates support all JSON data types (strings, numbers, booleans, objects, arrays)
-
-### Example Templates
-
-Simple value:
-```json
-{
-    "payload": "{\"temperature\": ${temperature}}"
-}
-```
-
-Nested values:
-```json
-{
-    "payload": "{\"location\": \"${device.location}\", \"reading\": ${sensors.temperature.value}}"
-}
-```
-
-Complex objects:
-```json
-{
-    "payload": "{\"device\": ${device}, \"readings\": ${sensors}}"
-}
-```
-
-### Template Processing
-
-The router automatically:
-- Handles type conversion for different data types
-- Processes nested JSON paths
-- Maintains proper JSON formatting
-- Provides error handling for missing values
-- Logs template processing issues for debugging
-
-### Example Rule with Templates
-
+#### 1. Simple Single Condition
+Monitor temperature and send alert when too high:
 ```json
 {
     "topic": "sensors/temperature",
@@ -221,80 +137,78 @@ The router automatically:
         ]
     },
     "action": {
-        "topic": "alerts/${device.id}",
-        "payload": "{\"alert\": \"High temperature\", \"reading\": ${temperature}, \"location\": \"${device.location}\"}"
+        "topic": "alerts/temperature",
+        "payload": "{\"alert\":\"High temperature detected\",\"value\":${temperature}}"
     }
 }
 ```
 
-Input message:
+#### 2. Multiple Conditions with AND
+Monitor environmental conditions:
 ```json
 {
-    "temperature": 32.5,
-    "device": {
-        "id": "sensor-001",
-        "location": "warehouse"
-    }
-}
-```
-
-Output message:
-```json
-{
-    "alert": "High temperature",
-    "reading": 32.5,
-    "location": "warehouse"
-}
-```
-
-## Supported Operators
-
-### Comparison Operators
-- `eq`: Equal to
-- `neq`: Not equal to
-- `gt`: Greater than
-- `lt`: Less than
-- `gte`: Greater than or equal to
-- `lte`: Less than or equal to
-
-### Logical Operators
-- `and`: All conditions must be true
-- `or`: At least one condition must be true
-
-## Running the Application
-
-```bash
-# Run with default configuration paths
-./mqtt-mux-router
-
-# Run with custom paths
-./mqtt-mux-router -config /path/to/config.json -rules /path/to/rules
-```
-
-## Rule Examples
-
-### Simple Condition
-```json
-{
-    "topic": "devices/status",
+    "topic": "sensors/environment",
     "conditions": {
         "operator": "and",
         "items": [
             {
+                "field": "temperature",
+                "operator": "gt",
+                "value": 30
+            },
+            {
+                "field": "humidity",
+                "operator": "gt",
+                "value": 70
+            },
+            {
                 "field": "status",
                 "operator": "eq",
-                "value": "offline"
+                "value": "active"
             }
         ]
     },
     "action": {
-        "topic": "alerts/device",
-        "payload": "{\"alert\":\"Device offline\",\"deviceId\":${deviceId}}"
+        "topic": "alerts/environment/${device.id}",
+        "payload": "{\"alert\":\"Environmental conditions critical\",\"temp\":${temperature},\"humidity\":${humidity}}"
     }
 }
 ```
 
-### Complex Nested Conditions
+#### 3. Multiple Conditions with OR
+Monitor device status:
+```json
+{
+    "topic": "devices/+/status",
+    "conditions": {
+        "operator": "or",
+        "items": [
+            {
+                "field": "battery",
+                "operator": "lt",
+                "value": 10
+            },
+            {
+                "field": "signal",
+                "operator": "lt",
+                "value": 20
+            },
+            {
+                "field": "error",
+                "operator": "exists",
+                "value": true
+            }
+        ]
+    },
+    "action": {
+        "topic": "maintenance/required/${device.id}",
+        "payload": "{\"device\":\"${device.id}\",\"issues\":{\"battery\":${battery},\"signal\":${signal},\"error\":${error}}}"
+    }
+}
+```
+
+#### 4. Nested Conditions with Groups
+Complex system monitoring:
 ```json
 {
     "topic": "system/metrics",
@@ -302,9 +216,9 @@ Output message:
         "operator": "and",
         "items": [
             {
-                "field": "cpu_usage",
-                "operator": "gt",
-                "value": 80
+                "field": "environment",
+                "operator": "eq",
+                "value": "production"
             }
         ],
         "groups": [
@@ -312,29 +226,273 @@ Output message:
                 "operator": "or",
                 "items": [
                     {
-                        "field": "memory_usage",
+                        "field": "cpu.usage",
                         "operator": "gt",
                         "value": 90
                     },
                     {
-                        "field": "swap_usage",
+                        "field": "memory.usage",
                         "operator": "gt",
-                        "value": 50
+                        "value": 85
+                    }
+                ]
+            },
+            {
+                "operator": "and",
+                "items": [
+                    {
+                        "field": "disk.available",
+                        "operator": "lt",
+                        "value": 10
+                    },
+                    {
+                        "field": "disk.write_rate",
+                        "operator": "gt",
+                        "value": 100
                     }
                 ]
             }
         ]
     },
     "action": {
-        "topic": "alerts/system",
-        "payload": "{\"alert\":\"System resources critical\"}"
+        "topic": "alerts/system/${system.id}",
+        "payload": "{\"alert\":\"System resources critical\",\"metrics\":{\"cpu\":${cpu.usage},\"memory\":${memory.usage},\"disk\":{\"available\":${disk.available},\"write_rate\":${disk.write_rate}}}}"
     }
 }
 ```
 
-## Production Deployment
+#### 5. String Operations and Pattern Matching
+Log message filtering:
+```json
+{
+    "topic": "logs/application",
+    "conditions": {
+        "operator": "and",
+        "items": [
+            {
+                "field": "level",
+                "operator": "eq",
+                "value": "error"
+            },
+            {
+                "field": "message",
+                "operator": "contains",
+                "value": "database"
+            }
+        ],
+        "groups": [
+            {
+                "operator": "or",
+                "items": [
+                    {
+                        "field": "component",
+                        "operator": "contains",
+                        "value": "auth"
+                    },
+                    {
+                        "field": "component",
+                        "operator": "contains",
+                        "value": "api"
+                    }
+                ]
+            }
+        ]
+    },
+    "action": {
+        "topic": "notifications/critical/${application.id}",
+        "payload": "{\"source\":\"${component}\",\"error\":\"${message}\",\"timestamp\":${timestamp}}"
+    }
+}
+```
 
-### Systemd Service
+#### 6. Multi-Stage Processing
+Temperature trend analysis:
+```json
+{
+    "topic": "sensors/+/temperature",
+    "conditions": {
+        "operator": "and",
+        "items": [
+            {
+                "field": "current",
+                "operator": "gt",
+                "value": 25
+            }
+        ],
+        "groups": [
+            {
+                "operator": "and",
+                "items": [
+                    {
+                        "field": "trend.direction",
+                        "operator": "eq",
+                        "value": "increasing"
+                    },
+                    {
+                        "field": "trend.rate",
+                        "operator": "gt",
+                        "value": 2
+                    }
+                ]
+            }
+        ]
+    },
+    "action": {
+        "topic": "analytics/temperature/${sensor.id}",
+        "payload": "{\"alert\":\"Rapid temperature increase\",\"current\":${current},\"trend\":{\"direction\":\"${trend.direction}\",\"rate\":${trend.rate}},\"location\":\"${sensor.location}\"}"
+    }
+}
+```
+
+### Rule Best Practices
+
+1. Topic Structure:
+   - Use descriptive topic hierarchies
+   - Use wildcards (+, #) carefully
+   - Group related devices/sensors under common prefixes
+
+2. Condition Design:
+   - Start with simple conditions and add complexity as needed
+   - Use groups to organize related conditions
+   - Consider performance impact of complex nested conditions
+
+3. Action Payloads:
+   - Include relevant context in messages
+   - Use consistent payload structures
+   - Include timestamps and identifiers
+   - Use nested JSON objects for complex data
+
+4. Error Handling:
+   - Include existence checks for optional fields
+   - Provide default values in templates
+   - Consider edge cases in numeric comparisons
+
+5. Maintenance:
+   - Document rule purposes and dependencies
+   - Use consistent naming conventions
+   - Regular review and cleanup of unused rules
+
+### Condition Operators
+
+#### Comparison Operators
+- `eq`: Equal to
+- `neq`: Not equal to
+- `gt`: Greater than
+- `lt`: Less than
+- `gte`: Greater than or equal to
+- `lte`: Less than or equal to
+- `exists`: Check if field exists
+- `contains`: Check if string contains value
+
+#### Logical Operators
+- `and`: All conditions must be true
+- `or`: At least one condition must be true
+
+### Message Templating
+
+Template syntax supports both simple and nested values:
+
+```json
+{
+    "payload": "{\"location\": \"${device.location}\", \"reading\": ${sensors.temperature.value}}"
+}
+```
+
+#### Template Features
+- Simple value: `${key}`
+- Nested path: `${path.to.value}`
+- Dynamic topics: `alerts/${device.id}/temperature`
+- Automatic type conversion for:
+  - Strings
+  - Numbers
+  - Booleans
+  - Objects
+  - Arrays
+  - Null values
+
+## Monitoring and Debugging
+
+### Debug Level Logging
+
+When `level` is set to `debug`, the router provides detailed logging for:
+
+1. MQTT Operations:
+```json
+{
+    "level": "debug",
+    "msg": "mqtt client connected successfully",
+    "broker": "ssl://mqtt.example.com:8883",
+    "clientId": "mqtt-mux-router",
+    "time": "2024-01-12T10:00:00Z"
+}
+```
+
+2. Message Processing:
+```json
+{
+    "level": "debug",
+    "msg": "received message",
+    "topic": "sensors/temperature",
+    "payload": "{\"temperature\":32.5}",
+    "qos": 0,
+    "messageId": 12345,
+    "time": "2024-01-12T10:00:01Z"
+}
+```
+
+3. Rule Evaluation:
+```json
+{
+    "level": "debug",
+    "msg": "evaluating condition",
+    "field": "temperature",
+    "operator": "gt",
+    "expectedValue": 30,
+    "actualValue": 32.5,
+    "result": true,
+    "time": "2024-01-12T10:00:01Z"
+}
+```
+
+### Viewing Logs
+
+```bash
+# View latest logs
+tail -f /var/log/mqtt-mux-router/mqtt-mux-router.log
+
+# Search for specific events
+grep "mqtt client connected" /var/log/mqtt-mux-router/mqtt-mux-router.log
+
+# View error logs
+grep "level\":\"error\"" /var/log/mqtt-mux-router/mqtt-mux-router.log
+```
+
+### Log Management
+
+```bash
+# List all log files
+ls -l /var/log/mqtt-mux-router/
+
+# Check total log size
+du -sh /var/log/mqtt-mux-router/
+
+# Clean up old logs manually
+find /var/log/mqtt-mux-router/ -name "mqtt-mux-router.log.*" -mtime +7 -delete
+```
+
+## Deployment
+
+### Running the Application
+
+```bash
+# Run with default configuration
+./mqtt-mux-router
+
+# Run with custom paths
+./mqtt-mux-router -config /path/to/config.json -rules /path/to/rules
+```
+
+### Service Management
 
 Create a systemd service file `/etc/systemd/system/mqtt-mux-router.service`:
 
@@ -353,61 +511,9 @@ Group=mqtt-mux
 WantedBy=multi-user.target
 ```
 
-Enable and start the service:
+Enable and manage the service:
 ```bash
 sudo systemctl enable mqtt-mux-router
 sudo systemctl start mqtt-mux-router
+sudo systemctl status mqtt-mux-router
 ```
-
-### Log Rotation
-
-Create `/etc/logrotate.d/mqtt-mux-router`:
-
-```
-/var/log/mqtt-mux-router.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-}
-```
-
-## Monitoring
-
-### Log Monitoring
-```bash
-# View service logs
-journalctl -u mqtt-mux-router -f
-
-# Check service status
-systemctl status mqtt-mux-router
-```
-
-### Debugging
-
-Enable debug logging by setting the log level in the logger configuration:
-
-```go
-handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-    Level: slog.LevelDebug,
-})
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- [Eclipse Paho MQTT Go Client](https://github.com/eclipse/paho.mqtt.golang)
-- [Go slog](https://pkg.go.dev/log/slog)
