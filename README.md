@@ -11,6 +11,31 @@ A powerful and flexible MQTT message router that processes messages from subscri
 - 🎯 Complex condition evaluation with AND/OR logic
 - 📊 Structured JSON logging with detailed debug information
 
+## Project Structure
+
+```
+mqtt-mux-router/
+├── cmd/
+│   └── mqtt-mux-router/
+│       └── main.go              # Application entry point
+├── config/
+│   └── config.go               # Configuration structures and loading
+├── internal/
+│   ├── broker/
+│   │   └── broker.go           # MQTT broker implementation
+│   ├── rule/
+│   │   ├── types.go            # Rule data structures
+│   │   ├── processor.go        # Rule processing and management
+│   │   ├── evaluator.go        # Rule condition evaluation
+│   │   └── template.go         # Template processing
+│   └── logger/
+│       └── logger.go           # Logging implementation
+├── rules/                      # Directory for rule files
+│   └── example.json
+├── go.mod
+└── README.md
+```
+
 ## Table of Contents
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -22,6 +47,31 @@ A powerful and flexible MQTT message router that processes messages from subscri
   - [Message Templating](#message-templating)
 - [Monitoring and Debugging](#monitoring-and-debugging)
 - [Deployment](#deployment)
+
+## Key Components
+
+### Broker (internal/broker/broker.go)
+- MQTT client management
+- Connection handling
+- Message routing
+- TLS support
+
+### Rule Processing (internal/rule/)
+- **types.go**: Core data structures for rules
+- **processor.go**: Rule loading and management
+- **evaluator.go**: Condition evaluation logic
+- **template.go**: Dynamic message templating
+
+### Configuration (config/config.go)
+- MQTT broker settings
+- TLS configuration
+- Logging settings
+
+### Logger (internal/logger/logger.go)
+- Structured JSON logging
+- File rotation support
+- Multiple output targets
+- Configurable log levels
 
 ## Installation
 
