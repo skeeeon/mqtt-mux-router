@@ -5,7 +5,17 @@
         "username": "mqttrouter",
         "password": "mqttrouter",
         "tls": {
-            "enable": false 
+            "enable": false
         }
+    },
+    "logging": {
+        "directory": "/var/log/mqtt-mux-router",
+        "maxSize": 10,
+        "maxAge": 7,
+        "maxBackups": 5,
+        "compress": true,
+        "logToFile": true,
+        "logToStdout": true,
+        "level": "info"
     }
 }

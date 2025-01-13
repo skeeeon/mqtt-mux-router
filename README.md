@@ -8,6 +8,7 @@ A powerful and flexible MQTT message router that processes messages from subscri
 - 📝 JSON-based configuration
 - 🔄 Automatic reconnection handling
 - 📝 Dynamic message templating with nested path support
+- 📋 Configurable logging with rotation and multiple outputs
 - 📋 Rule-based message processing
 - 🎯 Complex condition evaluation (AND/OR logic)
 - 📊 Structured JSON logging
@@ -52,6 +53,16 @@ Create a `config.json` file:
             "keyFile": "certs/client-key.pem",
             "caFile": "certs/ca.pem"
         }
+    },
+    "logging": {
+        "directory": "/var/log/mqtt-mux-router",
+        "maxSize": 10,
+        "maxAge": 7,
+        "maxBackups": 5,
+        "compress": true,
+        "logToFile": true,
+        "logToStdout": true,
+        "level": "info"
     }
 }
 ```
@@ -92,7 +103,68 @@ Example rule file (`rules/example.json`):
 ]
 ```
 
-## Message Templating
+### Logging Configuration
+
+The MQTT Mux Router supports comprehensive logging configuration with features like log rotation, multiple outputs, and different log levels. Configure logging in the `config.json` file:
+
+```json
+{
+    "logging": {
+        "directory": "/var/log/mqtt-mux-router",
+        "maxSize": 10,
+        "maxAge": 7,
+        "maxBackups": 5,
+        "compress": true,
+        "logToFile": true,
+        "logToStdout": true,
+        "level": "info"
+    }
+}
+```
+
+#### Logging Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `directory` | Directory for log files | - |
+| `maxSize` | Maximum size in megabytes before rotation | 10 |
+| `maxAge` | Days to retain old log files | 7 |
+| `maxBackups` | Number of old log files to retain | 5 |
+| `compress` | Compress rotated files | false |
+| `logToFile` | Enable file logging | false |
+| `logToStdout` | Enable stdout logging | true |
+| `level` | Log level (debug, info, warn, error) | info |
+
+#### Log Rotation
+
+The router automatically handles log rotation based on:
+- File size (maxSize)
+- File age (maxAge)
+- Number of backups (maxBackups)
+
+Rotated files can optionally be compressed to save space.
+
+#### Log Levels
+
+- `debug`: Detailed information for debugging
+- `info`: General operational information
+- `warn`: Warning messages for potential issues
+- `error`: Error messages for serious problems
+
+#### Log Format
+
+Logs are output in JSON format for easy parsing:
+
+```json
+{
+    "time": "2024-01-12T10:00:00Z",
+    "level": "INFO",
+    "msg": "connected to mqtt broker",
+    "broker": "ssl://mqtt.example.com:8883"
+}
+```
+
+### Message Templating
 
 The MQTT Mux Router supports dynamic message templating, allowing you to use values from input messages in your output messages. The template system supports both simple key-value replacements and nested JSON paths.
 

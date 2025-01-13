@@ -1,8 +1,10 @@
+// File: cmd/mqtt-mux-router/main.go
 package main
 
 import (
 	"context"
 	"flag"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,13 +20,16 @@ func main() {
 	rulesPath := flag.String("rules", "rules", "path to rules directory")
 	flag.Parse()
 
-	// Initialize logger
-	logger := logger.NewLogger()
-
 	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Fatal("failed to load config", "error", err)
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	// Initialize logger
+	logger, err := logger.NewLogger(&cfg.Logging)
+	if err != nil {
+		log.Fatalf("failed to initialize logger: %v", err)
 	}
 
 	// Load rules

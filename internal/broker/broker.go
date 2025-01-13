@@ -108,4 +108,3 @@ func newTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 		RootCAs:     caCertPool,
 	}, nil
 }
-
