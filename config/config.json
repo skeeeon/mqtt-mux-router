@@ -1,11 +1,14 @@
 {
     "mqtt": {
-        "broker": "tcp://haos.int.stone-age.io:1883",
+        "broker": "ssl://mqtt.example.com:8883",
         "clientId": "mqtt-mux-router",
-        "username": "mqttrouter",
-        "password": "mqttrouter",
+        "username": "user",
+        "password": "pass",
         "tls": {
-            "enable": false
+            "enable": true,
+	    "certFile": "certs/client-cert.pem",
+	    "keyFile": "certs/client-key.pem",
+	    "caFile": "certs/ca.pem"
         }
     },
     "logging": {
