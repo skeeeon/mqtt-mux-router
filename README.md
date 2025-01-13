@@ -552,10 +552,20 @@ Description=MQTT Mux Router
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/mqtt-mux-router -config /etc/mqtt-mux-router/config.json -rules /etc/mqtt-mux-router/rules
+Type=simple
+WorkingDirectory=/opt/mqtt-mux-router
+ExecStart=/opt/mqtt-mux-router/mqtt-mux-router -config /opt/mqtt-mux-router/config/config.json -rules /opt/mqtt-mux-router/rules
 Restart=always
+RestartSec=5
 User=mqtt-mux
 Group=mqtt-mux
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+# Security/Permissions
+PermissionsStartOnly=true
 
 [Install]
 WantedBy=multi-user.target
