@@ -1,4 +1,3 @@
-// File: internal/logger/logger.go
 package logger
 
 import (
@@ -45,10 +44,10 @@ func NewLogger(cfg *config.LoggingConfig) (*Logger, error) {
 		// Log to both file and stdout
 		fileWriter := &lumberjack.Logger{
 			Filename:   filepath.Join(cfg.Directory, "mqtt-mux-router.log"),
-			MaxSize:    cfg.MaxSize,    // megabytes
-			MaxAge:     cfg.MaxAge,     // days
-			MaxBackups: cfg.MaxBackups, // number of backups
-			Compress:   cfg.Compress,   // compress rotated files
+			MaxSize:    cfg.MaxSize,
+			MaxAge:     cfg.MaxAge,
+			MaxBackups: cfg.MaxBackups,
+			Compress:   cfg.Compress,
 		}
 		writer = io.MultiWriter(os.Stdout, fileWriter)
 	} else if cfg.LogToFile {

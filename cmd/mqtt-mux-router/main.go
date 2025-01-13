@@ -1,4 +1,3 @@
-// File: cmd/mqtt-mux-router/main.go
 package main
 
 import (
