@@ -15,17 +15,21 @@ import (
 )
 
 type Broker struct {
-	client  mqtt.Client
-	logger  *logger.Logger
-	config  *config.Config
-	wg      sync.WaitGroup
+	client     mqtt.Client
+	logger     *logger.Logger
+	config     *config.Config
+	processor  *rule.Processor
+	topics     []string
+	subscribed bool
+	mu         sync.RWMutex
+	wg         sync.WaitGroup
 }
 
 func NewBroker(cfg *config.Config, log *logger.Logger) (*Broker, error) {
-	log.Info("initializing mqtt broker", 
-		"broker", cfg.MQTT.Broker,
-		"clientId", cfg.MQTT.ClientID,
-		"tlsEnabled", cfg.MQTT.TLS.Enable)
+	broker := &Broker{
+		logger: log,
+		config: cfg,
+	}
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(cfg.MQTT.Broker).
@@ -35,17 +39,21 @@ func NewBroker(cfg *config.Config, log *logger.Logger) (*Broker, error) {
 		SetCleanSession(true).
 		SetAutoReconnect(true)
 
-	// Add connect and disconnect handlers
+	// Add connect handler to resubscribe to topics
 	opts.OnConnect = func(client mqtt.Client) {
-		log.Info("mqtt client connected", "broker", cfg.MQTT.Broker)
+		broker.logger.Info("mqtt client connected", "broker", cfg.MQTT.Broker)
+		broker.handleReconnect()
 	}
 
 	opts.OnConnectionLost = func(client mqtt.Client, err error) {
-		log.Error("mqtt connection lost", "error", err)
+		broker.logger.Error("mqtt connection lost", "error", err)
+		broker.mu.Lock()
+		broker.subscribed = false
+		broker.mu.Unlock()
 	}
 
 	opts.OnReconnecting = func(client mqtt.Client, opts *mqtt.ClientOptions) {
-		log.Info("mqtt client reconnecting", "broker", cfg.MQTT.Broker)
+		broker.logger.Info("mqtt client reconnecting", "broker", cfg.MQTT.Broker)
 	}
 
 	if cfg.MQTT.TLS.Enable {
@@ -57,31 +65,53 @@ func NewBroker(cfg *config.Config, log *logger.Logger) (*Broker, error) {
 	}
 
 	client := mqtt.NewClient(opts)
+	broker.client = client
 
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		return nil, fmt.Errorf("failed to connect to broker: %w", token.Error())
 	}
 
-	return &Broker{
-		client: client,
-		logger: log,
-		config: cfg,
-	}, nil
+	return broker, nil
 }
 
 func (b *Broker) Start(ctx context.Context, processor *rule.Processor) error {
-	topics := processor.GetTopics()
-	b.logger.Info("subscribing to topics", "count", len(topics))
+	b.processor = processor
+	b.topics = processor.GetTopics()
+	return b.subscribe()
+}
+
+func (b *Broker) handleReconnect() {
+	b.mu.RLock()
+	needsSubscribe := !b.subscribed && b.processor != nil
+	b.mu.RUnlock()
+
+	if needsSubscribe {
+		if err := b.subscribe(); err != nil {
+			b.logger.Error("failed to resubscribe after reconnection", "error", err)
+		}
+	}
+}
+
+func (b *Broker) subscribe() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.subscribed {
+		return nil
+	}
+
+	b.logger.Info("subscribing to topics", "count", len(b.topics))
 	
-	for _, topic := range topics {
+	for _, topic := range b.topics {
 		if token := b.client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
-			b.handleMessage(processor, msg)
+			b.handleMessage(b.processor, msg)
 		}); token.Wait() && token.Error() != nil {
 			return fmt.Errorf("failed to subscribe to topic %s: %w", topic, token.Error())
 		}
 		b.logger.Debug("subscribed to topic", "topic", topic)
 	}
 
+	b.subscribed = true
 	return nil
 }
 
