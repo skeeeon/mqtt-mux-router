@@ -66,7 +66,7 @@ mqtt-mux-router/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/mqtt-mux-router
+git clone https://github.com/skeeeon/mqtt-mux-router
 cd mqtt-mux-router
 
 # Build the binary
@@ -237,4 +237,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 * [Eclipse Paho MQTT Go Client](https://github.com/eclipse/paho.mqtt.golang) - MQTT client library
 * [Lumberjack](https://github.com/natefinch/lumberjack) - Log rotation
 * [slog](https://pkg.go.dev/log/slog) - Structured logging
-* This project was inspired by [eKuiper](https://github.com/lf-edge/ekuiper) but focuses on high-performance MQTT routing
+* This project was inspired by [eKuiper](https://github.com/lf-edge/ekuiper) but focuses soley on MQTT routing
