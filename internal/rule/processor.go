@@ -44,19 +44,26 @@ func NewProcessor(cfg ProcessorConfig, log *logger.Logger) *Processor {
     }
     
     p := &Processor{
-        index:      NewRuleIndex(),
-        msgPool:    NewMessagePool(),
-        resultPool: NewResultPool(),
+        index:      NewRuleIndex(log),
+        msgPool:    NewMessagePool(log),
+        resultPool: NewResultPool(log),
         workers:    cfg.Workers,
         jobChan:    make(chan *ProcessingMessage, cfg.QueueSize),
         logger:     log,
     }
+
+    p.logger.Info("initializing processor",
+        "workers", cfg.Workers,
+        "queueSize", cfg.QueueSize,
+        "batchSize", cfg.BatchSize)
 
     p.startWorkers()
     return p
 }
 
 func (p *Processor) LoadRules(rules []Rule) error {
+    p.logger.Info("loading rules into processor", "ruleCount", len(rules))
+    
     p.index.Clear()
     
     for i := range rules {
@@ -64,23 +71,31 @@ func (p *Processor) LoadRules(rules []Rule) error {
         p.index.Add(rule)
     }
 
-    p.logger.Info("rules loaded into index",
+    p.logger.Info("rules loaded successfully",
         "count", len(rules))
 
     return nil
 }
 
 func (p *Processor) GetTopics() []string {
-    return p.index.GetTopics()
+    topics := p.index.GetTopics()
+    p.logger.Debug("retrieved topics from index",
+        "topicCount", len(topics))
+    return topics
 }
 
 func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
+    p.logger.Debug("processing message",
+        "topic", topic,
+        "payloadSize", len(payload))
+
     msg := p.msgPool.Get()
     msg.Topic = topic
     msg.Payload = payload
 
     msg.Rules = p.index.Find(topic)
     if len(msg.Rules) == 0 {
+        p.logger.Debug("no matching rules found for topic", "topic", topic)
         p.msgPool.Put(msg)
         return nil, nil
     }
@@ -88,6 +103,9 @@ func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
     if err := json.Unmarshal(payload, &msg.Values); err != nil {
         p.msgPool.Put(msg)
         atomic.AddUint64(&p.stats.Errors, 1)
+        p.logger.Error("failed to unmarshal message",
+            "error", err,
+            "topic", topic)
         return nil, fmt.Errorf("failed to unmarshal message: %w", err)
     }
 
@@ -110,6 +128,9 @@ func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
     atomic.AddUint64(&p.stats.Processed, 1)
     if len(actions) > 0 {
         atomic.AddUint64(&p.stats.Matched, 1)
+        p.logger.Debug("message processing complete",
+            "topic", topic,
+            "matchedActions", len(actions))
     }
 
     p.msgPool.Put(msg)
@@ -226,6 +247,9 @@ func (p *Processor) convertToString(value interface{}) string {
 }
 
 func (p *Processor) startWorkers() {
+    p.logger.Info("starting worker pool",
+        "workerCount", p.workers)
+
     for i := 0; i < p.workers; i++ {
         p.wg.Add(1)
         go p.worker()
@@ -258,14 +282,22 @@ func (p *Processor) processMessage(msg *ProcessingMessage) {
 }
 
 func (p *Processor) GetStats() ProcessorStats {
-    return ProcessorStats{
+    stats := ProcessorStats{
         Processed: atomic.LoadUint64(&p.stats.Processed),
         Matched:   atomic.LoadUint64(&p.stats.Matched),
         Errors:    atomic.LoadUint64(&p.stats.Errors),
     }
+
+    p.logger.Debug("processor stats retrieved",
+        "processed", stats.Processed,
+        "matched", stats.Matched,
+        "errors", stats.Errors)
+
+    return stats
 }
 
 func (p *Processor) Close() {
+    p.logger.Info("shutting down processor")
     close(p.jobChan)
     p.wg.Wait()
 }
