@@ -142,10 +142,22 @@ Rules define message routing and transformation logic:
     },
     "action": {
         "topic": "alerts/temperature",
-        "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature}}"
+        "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature},\"message_id\":${uuid7()}}"
     }
 }
 ```
+### Template Functions
+
+The router supports the following template functions:
+
+- `${uuid4()}`: Generates a random UUID v4
+  - Use for random identifiers
+  - Example: `550e8400-e29b-41d4-a716-446655440000`
+
+- `${uuid7()}`: Generates a time-ordered UUID v7
+  - Use for event tracking and time-ordered identifiers
+  - Includes millisecond precision timestamp
+  - Example: `0188c57c-e1f1-7c63-b4f6-b9c2e4712fb1`
 
 ### Condition Operators
 
@@ -226,10 +238,3 @@ tail -f /var/log/mqtt-mux-router/mqtt-mux-router.log | grep "stats"
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-* [Eclipse Paho MQTT Go Client](https://github.com/eclipse/paho.mqtt.golang) - MQTT client library
-* [Lumberjack](https://github.com/natefinch/lumberjack) - Log rotation
-* [slog](https://pkg.go.dev/log/slog) - Structured logging
-* This project was inspired by [eKuiper](https://github.com/lf-edge/ekuiper) but focuses soley on MQTT routing
