@@ -9,6 +9,7 @@ import (
     "sync"
     "sync/atomic"
 
+    "github.com/google/uuid"
     "mqtt-mux-router/internal/logger"
 )
 
@@ -71,16 +72,13 @@ func (p *Processor) LoadRules(rules []Rule) error {
         p.index.Add(rule)
     }
 
-    p.logger.Info("rules loaded successfully",
-        "count", len(rules))
-
+    p.logger.Info("rules loaded successfully", "count", len(rules))
     return nil
 }
 
 func (p *Processor) GetTopics() []string {
     topics := p.index.GetTopics()
-    p.logger.Debug("retrieved topics from index",
-        "topicCount", len(topics))
+    p.logger.Debug("retrieved topics from index", "topicCount", len(topics))
     return topics
 }
 
@@ -165,33 +163,51 @@ func (p *Processor) processTemplate(template string, data map[string]interface{}
         "template", template,
         "dataKeys", getMapKeys(data))
 
-    re := regexp.MustCompile(`\${([^}]+)}`)
-    result := template
-
-    matches := re.FindAllStringSubmatch(template, -1)
-    for _, match := range matches {
-        if len(match) != 2 {
-            continue
+    // Handle function calls first (uuid4, uuid7)
+    functionPattern := regexp.MustCompile(`\${(uuid[47]\(\))}`)
+    result := functionPattern.ReplaceAllStringFunc(template, func(match string) string {
+        // Extract function name from ${function()}
+        function := match[2 : len(match)-1] // remove ${ and }
+        
+        switch function {
+        case "uuid4()":
+            id := uuid.New()
+            p.logger.Debug("generated UUIDv4", "uuid", id.String())
+            return id.String()
+        case "uuid7()":
+            id, err := uuid.NewV7()
+            if err != nil {
+                p.logger.Error("failed to generate UUIDv7", "error", err)
+                return ""
+            }
+            p.logger.Debug("generated UUIDv7", "uuid", id.String())
+            return id.String()
+        default:
+            p.logger.Debug("unknown function in template",
+                "function", function)
+            return match
         }
+    })
 
-        placeholder := match[0]
-        path := strings.Split(match[1], ".")
-
-        p.logger.Debug("processing template variable",
-            "placeholder", placeholder,
-            "path", path)
-
+    // Handle variable substitutions
+    varPattern := regexp.MustCompile(`\${([^}]+)}`)
+    result = varPattern.ReplaceAllStringFunc(result, func(match string) string {
+        path := strings.Split(match[2:len(match)-1], ".") // remove ${ and }
+        
         value, err := p.getValueFromPath(data, path)
         if err != nil {
             p.logger.Debug("template value not found",
-                "path", match[1],
+                "path", strings.Join(path, "."),
                 "error", err)
-            continue
+            return match
         }
 
         strValue := p.convertToString(value)
-        result = strings.ReplaceAll(result, placeholder, strValue)
-    }
+        p.logger.Debug("template variable processed",
+            "path", strings.Join(path, "."),
+            "value", strValue)
+        return strValue
+    })
 
     return result, nil
 }
