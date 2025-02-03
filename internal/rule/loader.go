@@ -9,19 +9,16 @@ import (
     "mqtt-mux-router/internal/logger"
 )
 
-// RulesLoader handles loading rules from the filesystem
 type RulesLoader struct {
     logger *logger.Logger
 }
 
-// NewRulesLoader creates a new rules loader
 func NewRulesLoader(log *logger.Logger) *RulesLoader {
     return &RulesLoader{
         logger: log,
     }
 }
 
-// LoadFromDirectory loads all rules from a directory and its subdirectories
 func (l *RulesLoader) LoadFromDirectory(path string) ([]Rule, error) {
     var rules []Rule
 
@@ -49,12 +46,23 @@ func (l *RulesLoader) LoadFromDirectory(path string) ([]Rule, error) {
             l.logger.Error("failed to parse rule file",
                 "path", path,
                 "error", err)
-            return err
+            return fmt.Errorf("failed to parse rule file %s: %w", path, err)
         }
 
         l.logger.Debug("successfully loaded rules",
             "path", path,
             "count", len(ruleSet))
+
+        // Validate rules before adding them
+        for i, rule := range ruleSet {
+            if err := validateRule(&rule); err != nil {
+                l.logger.Error("invalid rule configuration",
+                    "path", path,
+                    "ruleIndex", i,
+                    "error", err)
+                return fmt.Errorf("invalid rule in file %s at index %d: %w", path, i, err)
+            }
+        }
 
         rules = append(rules, ruleSet...)
         return nil
@@ -68,4 +76,68 @@ func (l *RulesLoader) LoadFromDirectory(path string) ([]Rule, error) {
         "totalRules", len(rules))
 
     return rules, nil
+}
+
+// validateRule performs basic validation of rule configuration
+func validateRule(rule *Rule) error {
+    if rule.Topic == "" {
+        return fmt.Errorf("rule topic cannot be empty")
+    }
+
+    if rule.Action == nil {
+        return fmt.Errorf("rule action cannot be nil")
+    }
+
+    if rule.Action.Topic == "" {
+        return fmt.Errorf("action topic cannot be empty")
+    }
+
+    if rule.Conditions != nil {
+        if err := validateConditions(rule.Conditions); err != nil {
+            return fmt.Errorf("invalid conditions: %w", err)
+        }
+    }
+
+    return nil
+}
+
+// validateConditions recursively validates condition groups
+func validateConditions(conditions *Conditions) error {
+    if conditions.Operator != "and" && conditions.Operator != "or" {
+        return fmt.Errorf("invalid operator: %s", conditions.Operator)
+    }
+
+    // Validate individual conditions
+    for _, condition := range conditions.Items {
+        if condition.Field == "" {
+            return fmt.Errorf("condition field cannot be empty")
+        }
+        if !isValidOperator(condition.Operator) {
+            return fmt.Errorf("invalid condition operator: %s", condition.Operator)
+        }
+    }
+
+    // Recursively validate nested condition groups
+    for _, group := range conditions.Groups {
+        if err := validateConditions(&group); err != nil {
+            return err
+        }
+    }
+
+    return nil
+}
+
+// isValidOperator checks if the operator is supported
+func isValidOperator(op string) bool {
+    validOperators := map[string]bool{
+        "eq":       true,
+        "neq":      true,
+        "gt":       true,
+        "lt":       true,
+        "gte":      true,
+        "lte":      true,
+        "exists":   true,
+        "contains": true,
+    }
+    return validOperators[op]
 }

@@ -1,96 +1,110 @@
 package logger
 
 import (
-	"io"
-	"log/slog"
-	"os"
-	"path/filepath"
-
+	"fmt"
 	"mqtt-mux-router/config"
-	"gopkg.in/natefinch/lumberjack.v2"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
+// Logger wraps zap.Logger to provide application-specific logging
 type Logger struct {
-	*slog.Logger
+	*zap.Logger
 }
 
-func NewLogger(cfg *config.LoggingConfig) (*Logger, error) {
-	// Create logging directory if it doesn't exist
-	if cfg.LogToFile && cfg.Directory != "" {
-		if err := os.MkdirAll(cfg.Directory, 0755); err != nil {
-			return nil, err
-		}
+// NewLogger creates a new logger instance
+func NewLogger(cfg *config.LogConfig) (*Logger, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("logger config is nil")
 	}
 
-	// Set up log level
-	var level slog.Level
+	// Parse log level
+	var level zapcore.Level
 	switch cfg.Level {
 	case "debug":
-		level = slog.LevelDebug
+		level = zap.DebugLevel
 	case "info":
-		level = slog.LevelInfo
+		level = zap.InfoLevel
 	case "warn":
-		level = slog.LevelWarn
+		level = zap.WarnLevel
 	case "error":
-		level = slog.LevelError
+		level = zap.ErrorLevel
 	default:
-		level = slog.LevelInfo
+		level = zap.InfoLevel
 	}
 
-	// Create the appropriate writer(s)
-	var writer io.Writer
-
-	if cfg.LogToFile && cfg.LogToStdout {
-		// Log to both file and stdout
-		fileWriter := &lumberjack.Logger{
-			Filename:   filepath.Join(cfg.Directory, "mqtt-mux-router.log"),
-			MaxSize:    cfg.MaxSize,
-			MaxAge:     cfg.MaxAge,
-			MaxBackups: cfg.MaxBackups,
-			Compress:   cfg.Compress,
-		}
-		writer = io.MultiWriter(os.Stdout, fileWriter)
-	} else if cfg.LogToFile {
-		// Log to file only
-		writer = &lumberjack.Logger{
-			Filename:   filepath.Join(cfg.Directory, "mqtt-mux-router.log"),
-			MaxSize:    cfg.MaxSize,
-			MaxAge:     cfg.MaxAge,
-			MaxBackups: cfg.MaxBackups,
-			Compress:   cfg.Compress,
-		}
-	} else {
-		// Log to stdout only (default)
-		writer = os.Stdout
+	// Create zap config
+	zapCfg := zap.Config{
+		Level:       zap.NewAtomicLevelAt(level),
+		Development: false,
+		Sampling: &zap.SamplingConfig{
+			Initial:    100,
+			Thereafter: 100,
+		},
+		Encoding:         cfg.Encoding,
+		EncoderConfig:    zap.NewProductionEncoderConfig(),
+		OutputPaths:      []string{cfg.OutputPath},
+		ErrorOutputPaths: []string{cfg.OutputPath},
 	}
 
-	// Create the handler with the configured options
-	handler := slog.NewJSONHandler(writer, &slog.HandlerOptions{
-		Level: level,
-	})
+	// Customize encoder config
+	zapCfg.EncoderConfig.TimeKey = "timestamp"
+	zapCfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	zapCfg.EncoderConfig.EncodeDuration = zapcore.StringDurationEncoder
+	zapCfg.EncoderConfig.StacktraceKey = "stacktrace"
 
-	return &Logger{
-		Logger: slog.New(handler),
-	}, nil
+	logger, err := zapCfg.Build(
+		zap.AddCallerSkip(1),
+		zap.AddStacktrace(zapcore.ErrorLevel),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %w", err)
+	}
+
+	return &Logger{Logger: logger}, nil
 }
 
-// Fatal logs a message at Fatal level and exits the program
+// Fatal logs a message at Fatal level and exits
 func (l *Logger) Fatal(msg string, args ...interface{}) {
-	l.Error(msg, args...)
-	os.Exit(1)
+	fields := argsToFields(args...)
+	l.Logger.Fatal(msg, fields...)
 }
 
 // Error logs a message at Error level
 func (l *Logger) Error(msg string, args ...interface{}) {
-	l.Logger.Error(msg, args...)
+	fields := argsToFields(args...)
+	l.Logger.Error(msg, fields...)
 }
 
 // Info logs a message at Info level
 func (l *Logger) Info(msg string, args ...interface{}) {
-	l.Logger.Info(msg, args...)
+	fields := argsToFields(args...)
+	l.Logger.Info(msg, fields...)
 }
 
 // Debug logs a message at Debug level
 func (l *Logger) Debug(msg string, args ...interface{}) {
-	l.Logger.Debug(msg, args...)
+	fields := argsToFields(args...)
+	l.Logger.Debug(msg, fields...)
+}
+
+// Sync flushes any buffered log entries
+func (l *Logger) Sync() error {
+	return l.Logger.Sync()
+}
+
+// argsToFields converts variadic args to zap fields
+func argsToFields(args ...interface{}) []zap.Field {
+	fields := make([]zap.Field, 0, len(args)/2)
+	for i := 0; i < len(args); i += 2 {
+		if i+1 < len(args) {
+			key, ok := args[i].(string)
+			if !ok {
+				continue
+			}
+			fields = append(fields, zap.Any(key, args[i+1]))
+		}
+	}
+	return fields
 }

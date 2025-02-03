@@ -12,14 +12,12 @@ import (
     "mqtt-mux-router/internal/logger"
 )
 
-// ProcessorConfig holds processor configuration
 type ProcessorConfig struct {
     Workers    int
     QueueSize  int
     BatchSize  int
 }
 
-// Processor provides rule processing
 type Processor struct {
     index      *RuleIndex
     msgPool    *MessagePool
@@ -31,14 +29,12 @@ type Processor struct {
     wg         sync.WaitGroup
 }
 
-// ProcessorStats tracks processing metrics
 type ProcessorStats struct {
     Processed uint64
     Matched   uint64
     Errors    uint64
 }
 
-// NewProcessor creates a new processor
 func NewProcessor(cfg ProcessorConfig, log *logger.Logger) *Processor {
     if cfg.Workers <= 0 {
         cfg.Workers = 1
@@ -56,13 +52,10 @@ func NewProcessor(cfg ProcessorConfig, log *logger.Logger) *Processor {
         logger:     log,
     }
 
-    // Start worker pool
     p.startWorkers()
-
     return p
 }
 
-// LoadRules loads rules into the index
 func (p *Processor) LoadRules(rules []Rule) error {
     p.index.Clear()
     
@@ -77,33 +70,27 @@ func (p *Processor) LoadRules(rules []Rule) error {
     return nil
 }
 
-// GetTopics returns a list of all topics from the loaded rules
 func (p *Processor) GetTopics() []string {
     return p.index.GetTopics()
 }
 
-// Process handles a message
 func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
-    // Get message object from pool
     msg := p.msgPool.Get()
     msg.Topic = topic
     msg.Payload = payload
 
-    // Find matching rules
     msg.Rules = p.index.Find(topic)
     if len(msg.Rules) == 0 {
         p.msgPool.Put(msg)
         return nil, nil
     }
 
-    // Parse payload
     if err := json.Unmarshal(payload, &msg.Values); err != nil {
         p.msgPool.Put(msg)
         atomic.AddUint64(&p.stats.Errors, 1)
         return nil, fmt.Errorf("failed to unmarshal message: %w", err)
     }
 
-    // Process rules
     for _, rule := range msg.Rules {
         if rule.Conditions == nil || p.evaluateConditions(rule.Conditions, msg.Values) {
             action, err := p.processActionTemplate(rule.Action, msg.Values)
@@ -117,7 +104,6 @@ func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
         }
     }
 
-    // Copy actions before returning message to pool
     actions := make([]*Action, len(msg.Actions))
     copy(actions, msg.Actions)
 
@@ -126,21 +112,16 @@ func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
         atomic.AddUint64(&p.stats.Matched, 1)
     }
 
-    // Return message to pool
     p.msgPool.Put(msg)
-
     return actions, nil
 }
 
-// processActionTemplate processes the action template with values from the message
 func (p *Processor) processActionTemplate(action *Action, msg map[string]interface{}) (*Action, error) {
-    // Create a new action to avoid modifying the original
     processedAction := &Action{
         Topic:   action.Topic,
         Payload: action.Payload,
     }
 
-    // Process the topic template if it contains variables
     if strings.Contains(action.Topic, "${") {
         topic, err := p.processTemplate(action.Topic, msg)
         if err != nil {
@@ -149,7 +130,6 @@ func (p *Processor) processActionTemplate(action *Action, msg map[string]interfa
         processedAction.Topic = topic
     }
 
-    // Process the payload template
     payload, err := p.processTemplate(action.Payload, msg)
     if err != nil {
         return nil, fmt.Errorf("failed to process payload template: %w", err)
@@ -159,13 +139,11 @@ func (p *Processor) processActionTemplate(action *Action, msg map[string]interfa
     return processedAction, nil
 }
 
-// Template processing functions
 func (p *Processor) processTemplate(template string, data map[string]interface{}) (string, error) {
     p.logger.Debug("processing template",
         "template", template,
         "dataKeys", getMapKeys(data))
 
-    // Find all template variables in the format ${path.to.value}
     re := regexp.MustCompile(`\${([^}]+)}`)
     result := template
 
@@ -175,14 +153,13 @@ func (p *Processor) processTemplate(template string, data map[string]interface{}
             continue
         }
 
-        placeholder := match[0]    // The full placeholder (e.g., ${path.to.value})
-        path := strings.Split(match[1], ".") // Split the path into parts
+        placeholder := match[0]
+        path := strings.Split(match[1], ".")
 
         p.logger.Debug("processing template variable",
             "placeholder", placeholder,
             "path", path)
 
-        // Get the value from the data using the path
         value, err := p.getValueFromPath(data, path)
         if err != nil {
             p.logger.Debug("template value not found",
@@ -191,7 +168,6 @@ func (p *Processor) processTemplate(template string, data map[string]interface{}
             continue
         }
 
-        // Convert value to string and replace in template
         strValue := p.convertToString(value)
         result = strings.ReplaceAll(result, placeholder, strValue)
     }
@@ -237,7 +213,6 @@ func (p *Processor) convertToString(value interface{}) string {
     case nil:
         return "null"
     case map[string]interface{}, []interface{}:
-        // For complex types, convert to JSON
         jsonBytes, err := json.Marshal(v)
         if err != nil {
             p.logger.Debug("failed to marshal complex value to JSON",
@@ -250,7 +225,6 @@ func (p *Processor) convertToString(value interface{}) string {
     }
 }
 
-// Internal worker pool functions
 func (p *Processor) startWorkers() {
     for i := 0; i < p.workers; i++ {
         p.wg.Add(1)
@@ -283,7 +257,6 @@ func (p *Processor) processMessage(msg *ProcessingMessage) {
     }
 }
 
-// GetStats returns current processing statistics
 func (p *Processor) GetStats() ProcessorStats {
     return ProcessorStats{
         Processed: atomic.LoadUint64(&p.stats.Processed),
@@ -292,7 +265,6 @@ func (p *Processor) GetStats() ProcessorStats {
     }
 }
 
-// Close shuts down the processor
 func (p *Processor) Close() {
     close(p.jobChan)
     p.wg.Wait()

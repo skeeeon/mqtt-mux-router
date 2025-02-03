@@ -35,7 +35,6 @@ type BrokerStats struct {
     Errors            uint64
 }
 
-// BrokerConfig holds broker-specific configuration
 type BrokerConfig struct {
     ProcessorWorkers int
     QueueSize       int
@@ -43,7 +42,6 @@ type BrokerConfig struct {
 }
 
 func NewBroker(cfg *config.Config, log *logger.Logger, brokerCfg BrokerConfig) (*Broker, error) {
-    // Create processor
     processorCfg := rule.ProcessorConfig{
         Workers:    brokerCfg.ProcessorWorkers,
         QueueSize:  brokerCfg.QueueSize,
@@ -66,7 +64,6 @@ func NewBroker(cfg *config.Config, log *logger.Logger, brokerCfg BrokerConfig) (
         SetCleanSession(true).
         SetAutoReconnect(true)
 
-    // Add connect handler to resubscribe to topics
     opts.OnConnect = func(client mqtt.Client) {
         broker.handleConnect()
     }
@@ -120,12 +117,10 @@ func (b *Broker) handleDisconnect(err error) {
 }
 
 func (b *Broker) Start(ctx context.Context, rules []rule.Rule) error {
-    // Load rules into processor
     if err := b.processor.LoadRules(rules); err != nil {
         return fmt.Errorf("failed to load rules: %w", err)
     }
 
-    // Extract unique topics
     topics := make(map[string]struct{})
     for _, rule := range rules {
         topics[rule.Topic] = struct{}{}

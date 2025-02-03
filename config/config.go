@@ -6,8 +6,8 @@ import (
 )
 
 type Config struct {
-	MQTT    MQTTConfig    `json:"mqtt"`
-	Logging LoggingConfig `json:"logging"`
+	MQTT    MQTTConfig `json:"mqtt"`
+	Logging LogConfig  `json:"logging"`
 }
 
 type MQTTConfig struct {
@@ -23,15 +23,11 @@ type MQTTConfig struct {
 	} `json:"tls"`
 }
 
-type LoggingConfig struct {
-	Directory   string `json:"directory"`
-	MaxSize     int    `json:"maxSize"`     // megabytes
-	MaxAge      int    `json:"maxAge"`      // days
-	MaxBackups  int    `json:"maxBackups"`  // number of backup files
-	Compress    bool   `json:"compress"`    // compress rotated files
-	LogToFile   bool   `json:"logToFile"`   // enable file logging
-	LogToStdout bool   `json:"logToStdout"` // enable stdout logging
-	Level       string `json:"level"`       // debug, info, warn, error
+// LogConfig holds the logger configuration
+type LogConfig struct {
+	Level      string `json:"level"`      // debug, info, warn, error
+	OutputPath string `json:"outputPath"` // file path or "stdout"
+	Encoding   string `json:"encoding"`   // json or console
 }
 
 func Load(path string) (*Config, error) {
@@ -46,20 +42,14 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Set default values for logging if not specified
-	if config.Logging.MaxSize == 0 {
-		config.Logging.MaxSize = 10 // 10MB default
-	}
-	if config.Logging.MaxAge == 0 {
-		config.Logging.MaxAge = 7 // 7 days default
-	}
-	if config.Logging.MaxBackups == 0 {
-		config.Logging.MaxBackups = 5 // 5 backups default
-	}
 	if config.Logging.Level == "" {
-		config.Logging.Level = "info" // default log level
+		config.Logging.Level = "info"
 	}
-	if !config.Logging.LogToFile && !config.Logging.LogToStdout {
-		config.Logging.LogToStdout = true // default to stdout if nothing specified
+	if config.Logging.OutputPath == "" {
+		config.Logging.OutputPath = "stdout"
+	}
+	if config.Logging.Encoding == "" {
+		config.Logging.Encoding = "json"
 	}
 
 	return &config, nil

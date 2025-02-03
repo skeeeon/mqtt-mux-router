@@ -1,4 +1,4 @@
-// File: internal/rule/types.go
+//internal/rule/types.go
 package rule
 
 type Rule struct {

@@ -6,7 +6,6 @@ import (
     "strings"
 )
 
-// evaluateConditions evaluates a group of conditions with logical operators
 func (p *Processor) evaluateConditions(conditions *Conditions, msg map[string]interface{}) bool {
     if conditions == nil || (len(conditions.Items) == 0 && len(conditions.Groups) == 0) {
         p.logger.Debug("no conditions to evaluate")
@@ -20,7 +19,6 @@ func (p *Processor) evaluateConditions(conditions *Conditions, msg map[string]in
 
     results := make([]bool, 0, len(conditions.Items)+len(conditions.Groups))
 
-    // Evaluate individual conditions
     for i, condition := range conditions.Items {
         result := p.evaluateCondition(&condition, msg)
         results = append(results, result)
@@ -33,7 +31,6 @@ func (p *Processor) evaluateConditions(conditions *Conditions, msg map[string]in
             "result", result)
     }
 
-    // Evaluate nested condition groups
     for i, group := range conditions.Groups {
         result := p.evaluateConditions(&group, msg)
         results = append(results, result)
@@ -44,7 +41,6 @@ func (p *Processor) evaluateConditions(conditions *Conditions, msg map[string]in
             "result", result)
     }
 
-    // Apply logical operator
     var finalResult bool
     switch conditions.Operator {
     case "and":
@@ -75,7 +71,6 @@ func (p *Processor) evaluateConditions(conditions *Conditions, msg map[string]in
     return finalResult
 }
 
-// evaluateCondition evaluates a single condition
 func (p *Processor) evaluateCondition(cond *Condition, msg map[string]interface{}) bool {
     value, ok := msg[cond.Field]
     if !ok {
@@ -118,12 +113,10 @@ func (p *Processor) evaluateCondition(cond *Condition, msg map[string]interface{
     return result
 }
 
-// compareNumeric compares two numeric values
 func (p *Processor) compareNumeric(a, b interface{}, op string) bool {
     var numA, numB float64
     var err error
 
-    // Convert first value
     switch v := a.(type) {
     case float64:
         numA = v
@@ -142,7 +135,6 @@ func (p *Processor) compareNumeric(a, b interface{}, op string) bool {
         return false
     }
 
-    // Convert second value
     switch v := b.(type) {
     case float64:
         numB = v
@@ -175,7 +167,6 @@ func (p *Processor) compareNumeric(a, b interface{}, op string) bool {
     }
 }
 
-// Helper function to get map keys
 func getMapKeys(m map[string]interface{}) []string {
     keys := make([]string, 0, len(m))
     for k := range m {
