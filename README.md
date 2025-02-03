@@ -142,7 +142,7 @@ Rules define message routing and transformation logic:
     },
     "action": {
         "topic": "alerts/temperature",
-        "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature},\"message_id\":${uuid7()}}"
+        "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature},\"message_id\": \"${uuid7()}\"}"
     }
 }
 ```
