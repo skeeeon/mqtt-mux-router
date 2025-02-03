@@ -7,7 +7,7 @@ A high-performance MQTT message router that processes messages from subscribed t
 - 🚀 High-performance message processing with worker pools
 - 🔐 TLS support with client certificates
 - 📝 Dynamic message templating with nested path support
-- 📋 Configurable logging with rotation and multiple outputs
+- 📋 Configurable logging with multiple outputs
 - 🔄 Automatic reconnection handling with subscription recovery
 - 🎯 Complex condition evaluation with AND/OR logic
 - 📊 Comprehensive performance metrics and monitoring
@@ -116,14 +116,9 @@ Configure MQTT connection in `config.json`:
 ```json
 {
     "logging": {
-        "directory": "/var/log/mqtt-mux-router",
-        "maxSize": 10,
-        "maxAge": 7,
-        "maxBackups": 5,
-        "compress": true,
-        "logToFile": true,
-        "logToStdout": true,
-        "level": "info"
+        "level": "info",
+        "outputPath": "/var/log/mqtt-mux-router/mqtt-mux-router.log",
+        "encoding": "json"
     }
 }
 ```
