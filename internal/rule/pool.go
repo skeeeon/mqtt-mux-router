@@ -1,3 +1,5 @@
+//file: internal/rule/pool.go
+
 package rule
 
 import (

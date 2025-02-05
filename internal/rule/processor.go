@@ -1,3 +1,5 @@
+//file: internal/rule/processor.go
+
 package rule
 
 import (
@@ -11,6 +13,7 @@ import (
 
     "github.com/google/uuid"
     "mqtt-mux-router/internal/logger"
+    "mqtt-mux-router/internal/metrics"
 )
 
 type ProcessorConfig struct {
@@ -26,6 +29,7 @@ type Processor struct {
     workers    int
     jobChan    chan *ProcessingMessage
     logger     *logger.Logger
+    metrics    *metrics.Metrics
     stats      ProcessorStats
     wg         sync.WaitGroup
 }
@@ -36,14 +40,14 @@ type ProcessorStats struct {
     Errors    uint64
 }
 
-func NewProcessor(cfg ProcessorConfig, log *logger.Logger) *Processor {
+func NewProcessor(cfg ProcessorConfig, log *logger.Logger, metrics *metrics.Metrics) *Processor {
     if cfg.Workers <= 0 {
         cfg.Workers = 1
     }
     if cfg.QueueSize <= 0 {
         cfg.QueueSize = 1000
     }
-    
+
     p := &Processor{
         index:      NewRuleIndex(log),
         msgPool:    NewMessagePool(log),
@@ -51,6 +55,7 @@ func NewProcessor(cfg ProcessorConfig, log *logger.Logger) *Processor {
         workers:    cfg.Workers,
         jobChan:    make(chan *ProcessingMessage, cfg.QueueSize),
         logger:     log,
+        metrics:    metrics,
     }
 
     p.logger.Info("initializing processor",
@@ -58,20 +63,22 @@ func NewProcessor(cfg ProcessorConfig, log *logger.Logger) *Processor {
         "queueSize", cfg.QueueSize,
         "batchSize", cfg.BatchSize)
 
+    p.metrics.SetWorkerPoolActive(float64(cfg.Workers))
     p.startWorkers()
     return p
 }
 
 func (p *Processor) LoadRules(rules []Rule) error {
     p.logger.Info("loading rules into processor", "ruleCount", len(rules))
-    
+
     p.index.Clear()
-    
+
     for i := range rules {
         rule := &rules[i]
         p.index.Add(rule)
     }
 
+    p.metrics.SetRulesActive(float64(len(rules)))
     p.logger.Info("rules loaded successfully", "count", len(rules))
     return nil
 }
@@ -80,6 +87,10 @@ func (p *Processor) GetTopics() []string {
     topics := p.index.GetTopics()
     p.logger.Debug("retrieved topics from index", "topicCount", len(topics))
     return topics
+}
+
+func (p *Processor) GetJobChannel() chan *ProcessingMessage {
+    return p.jobChan
 }
 
 func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
@@ -101,6 +112,7 @@ func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
     if err := json.Unmarshal(payload, &msg.Values); err != nil {
         p.msgPool.Put(msg)
         atomic.AddUint64(&p.stats.Errors, 1)
+        p.metrics.IncMessagesTotal("error")
         p.logger.Error("failed to unmarshal message",
             "error", err,
             "topic", topic)
@@ -111,11 +123,14 @@ func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
         if rule.Conditions == nil || p.evaluateConditions(rule.Conditions, msg.Values) {
             action, err := p.processActionTemplate(rule.Action, msg.Values)
             if err != nil {
+                p.metrics.IncTemplateOpsTotal("error")
                 p.logger.Error("failed to process action template",
                     "error", err,
                     "topic", rule.Topic)
                 continue
             }
+            p.metrics.IncTemplateOpsTotal("success")
+            p.metrics.IncRuleMatches()
             msg.Actions = append(msg.Actions, action)
         }
     }
@@ -168,7 +183,7 @@ func (p *Processor) processTemplate(template string, data map[string]interface{}
     result := functionPattern.ReplaceAllStringFunc(template, func(match string) string {
         // Extract function name from ${function()}
         function := match[2 : len(match)-1] // remove ${ and }
-        
+
         switch function {
         case "uuid4()":
             id := uuid.New()
@@ -193,7 +208,7 @@ func (p *Processor) processTemplate(template string, data map[string]interface{}
     varPattern := regexp.MustCompile(`\${([^}]+)}`)
     result = varPattern.ReplaceAllStringFunc(result, func(match string) string {
         path := strings.Split(match[2:len(match)-1], ".") // remove ${ and }
-        
+
         value, err := p.getValueFromPath(data, path)
         if err != nil {
             p.logger.Debug("template value not found",
@@ -285,6 +300,7 @@ func (p *Processor) processMessage(msg *ProcessingMessage) {
 
     if err := json.Unmarshal(msg.Payload, &msg.Values); err != nil {
         atomic.AddUint64(&p.stats.Errors, 1)
+        p.metrics.IncMessagesTotal("error")
         p.logger.Error("failed to unmarshal message",
             "error", err,
             "topic", msg.Topic)

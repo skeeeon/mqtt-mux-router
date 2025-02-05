@@ -1,3 +1,5 @@
+//file: internal/rule/index.go
+
 package rule
 
 import (

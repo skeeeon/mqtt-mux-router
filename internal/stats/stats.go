@@ -1,3 +1,5 @@
+//file: internal/stats/stats.go
+
 package stats
 
 import (

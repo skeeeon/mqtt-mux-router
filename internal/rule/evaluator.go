@@ -1,3 +1,5 @@
+//file: internal/rule/evaluator.go
+
 package rule
 
 import (

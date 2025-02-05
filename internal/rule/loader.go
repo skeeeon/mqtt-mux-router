@@ -1,3 +1,5 @@
+//file: internal/rule/loader.go
+
 package rule
 
 import (
