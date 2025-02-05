@@ -45,20 +45,27 @@ type BrokerConfig struct {
     BatchSize       int
 }
 
-func NewBroker(cfg *config.Config, log *logger.Logger, brokerCfg BrokerConfig, metrics *metrics.Metrics) (*Broker, error) {
+// safeMetricsUpdate safely updates metrics if they are enabled
+func (b *Broker) safeMetricsUpdate(fn func(*metrics.Metrics)) {
+    if b.metrics != nil {
+        fn(b.metrics)
+    }
+}
+
+func NewBroker(cfg *config.Config, log *logger.Logger, brokerCfg BrokerConfig, metricsService *metrics.Metrics) (*Broker, error) {
     processorCfg := rule.ProcessorConfig{
         Workers:    brokerCfg.ProcessorWorkers,
         QueueSize:  brokerCfg.QueueSize,
         BatchSize:  brokerCfg.BatchSize,
     }
 
-    processor := rule.NewProcessor(processorCfg, log, metrics)
+    processor := rule.NewProcessor(processorCfg, log, metricsService)
 
     broker := &Broker{
         logger:    log,
         config:    cfg,
         processor: processor,
-        metrics:   metrics,
+        metrics:   metricsService,
     }
 
     opts := mqtt.NewClientOptions().
@@ -79,7 +86,9 @@ func NewBroker(cfg *config.Config, log *logger.Logger, brokerCfg BrokerConfig, m
 
     opts.OnReconnecting = func(client mqtt.Client, opts *mqtt.ClientOptions) {
         broker.logger.Info("mqtt client reconnecting", "broker", cfg.MQTT.Broker)
-        broker.metrics.IncMQTTReconnects()
+        broker.safeMetricsUpdate(func(m *metrics.Metrics) {
+            m.IncMQTTReconnects()
+        })
     }
 
     if cfg.MQTT.TLS.Enable {
@@ -103,7 +112,10 @@ func NewBroker(cfg *config.Config, log *logger.Logger, brokerCfg BrokerConfig, m
 func (b *Broker) handleConnect() {
     b.logger.Info("mqtt client connected", "broker", b.config.MQTT.Broker)
     b.stats.LastReconnect = time.Now()
-    b.metrics.SetMQTTConnectionStatus(true)
+
+    b.safeMetricsUpdate(func(m *metrics.Metrics) {
+        m.SetMQTTConnectionStatus(true)
+    })
 
     b.mu.RLock()
     needsSubscribe := !b.subscribed && len(b.topics) > 0
@@ -118,7 +130,9 @@ func (b *Broker) handleConnect() {
 
 func (b *Broker) handleDisconnect(err error) {
     b.logger.Error("mqtt connection lost", "error", err)
-    b.metrics.SetMQTTConnectionStatus(false)
+    b.safeMetricsUpdate(func(m *metrics.Metrics) {
+        m.SetMQTTConnectionStatus(false)
+    })
     b.mu.Lock()
     b.subscribed = false
     b.mu.Unlock()
@@ -139,7 +153,10 @@ func (b *Broker) Start(ctx context.Context, rules []rule.Rule) error {
         b.topics = append(b.topics, topic)
     }
 
-    b.metrics.SetRulesActive(float64(len(rules)))
+    b.safeMetricsUpdate(func(m *metrics.Metrics) {
+        m.SetRulesActive(float64(len(rules)))
+    })
+
     return b.subscribe()
 }
 
@@ -168,7 +185,10 @@ func (b *Broker) subscribe() error {
 
 func (b *Broker) handleMessage(msg mqtt.Message) {
     atomic.AddUint64(&b.stats.MessagesReceived, 1)
-    b.metrics.IncMessagesTotal("received")
+
+    b.safeMetricsUpdate(func(m *metrics.Metrics) {
+        m.IncMessagesTotal("received")
+    })
 
     b.logger.Debug("processing message",
         "topic", msg.Topic(),
@@ -177,25 +197,33 @@ func (b *Broker) handleMessage(msg mqtt.Message) {
     actions, err := b.processor.Process(msg.Topic(), msg.Payload())
     if err != nil {
         atomic.AddUint64(&b.stats.Errors, 1)
-        b.metrics.IncMessagesTotal("error")
+        b.safeMetricsUpdate(func(m *metrics.Metrics) {
+            m.IncMessagesTotal("error")
+        })
         b.logger.Error("failed to process message",
             "error", err,
             "topic", msg.Topic())
         return
     }
 
-    b.metrics.IncMessagesTotal("processed")
+    b.safeMetricsUpdate(func(m *metrics.Metrics) {
+        m.IncMessagesTotal("processed")
+    })
 
     for _, action := range actions {
         if token := b.client.Publish(action.Topic, 0, false, action.Payload); token.Wait() && token.Error() != nil {
             atomic.AddUint64(&b.stats.Errors, 1)
-            b.metrics.IncActionsTotal("error")
+            b.safeMetricsUpdate(func(m *metrics.Metrics) {
+                m.IncActionsTotal("error")
+            })
             b.logger.Error("failed to publish message",
                 "error", token.Error(),
                 "topic", action.Topic)
         } else {
             atomic.AddUint64(&b.stats.MessagesPublished, 1)
-            b.metrics.IncActionsTotal("success")
+            b.safeMetricsUpdate(func(m *metrics.Metrics) {
+                m.IncActionsTotal("success")
+            })
             b.logger.Debug("published message",
                 "from", msg.Topic(),
                 "to", action.Topic,
@@ -203,11 +231,13 @@ func (b *Broker) handleMessage(msg mqtt.Message) {
         }
     }
 
-    // Update queue metrics
-    b.metrics.SetMessageQueueDepth(float64(len(b.processor.GetJobChannel())))
-    b.metrics.SetProcessingBacklog(float64(
-        atomic.LoadUint64(&b.stats.MessagesReceived) -
-        atomic.LoadUint64(&b.stats.MessagesPublished)))
+    // Update queue metrics if enabled
+    b.safeMetricsUpdate(func(m *metrics.Metrics) {
+        m.SetMessageQueueDepth(float64(len(b.processor.GetJobChannel())))
+        m.SetProcessingBacklog(float64(
+            atomic.LoadUint64(&b.stats.MessagesReceived) -
+            atomic.LoadUint64(&b.stats.MessagesPublished)))
+    })
 }
 
 func (b *Broker) GetStats() BrokerStats {

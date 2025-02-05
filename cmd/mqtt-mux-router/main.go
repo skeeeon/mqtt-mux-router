@@ -1,147 +1,174 @@
 package main
 
 import (
-    "context"
-    "flag"
-    "log"
-    "net/http"
-    "os"
-    "os/signal"
-    "runtime"
-    "syscall"
-    "time"
+	"context"
+	"flag"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-    "github.com/prometheus/client_golang/prometheus"
-    "github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-    "mqtt-mux-router/config"
-    "mqtt-mux-router/internal/broker"
-    "mqtt-mux-router/internal/logger"
-    "mqtt-mux-router/internal/metrics"
-    "mqtt-mux-router/internal/rule"
+	"mqtt-mux-router/config"
+	"mqtt-mux-router/internal/broker"
+	"mqtt-mux-router/internal/logger"
+	"mqtt-mux-router/internal/metrics"
+	"mqtt-mux-router/internal/rule"
 )
 
 func main() {
-    // Command line flags
-    configPath := flag.String("config", "config/config.json", "path to config file")
-    rulesPath := flag.String("rules", "rules", "path to rules directory")
-    workers := flag.Int("workers", runtime.NumCPU(), "number of worker threads")
-    queueSize := flag.Int("queue-size", 1000, "size of processing queue")
-    batchSize := flag.Int("batch-size", 100, "message batch size")
-    metricsAddr := flag.String("metrics-addr", ":2112", "metrics server address")
-    metricsPath := flag.String("metrics-path", "/metrics", "metrics endpoint path")
-    metricsInterval := flag.Duration("metrics-interval", 15*time.Second, "metrics collection interval")
-    flag.Parse()
+	// Command line flags for config and rules
+	configPath := flag.String("config", "config/config.json", "path to config file")
+	rulesPath := flag.String("rules", "rules", "path to rules directory")
 
-    // Load configuration
-    cfg, err := config.Load(*configPath)
-    if err != nil {
-        log.Fatalf("failed to load config: %v", err)
-    }
+	// Optional override flags
+	workersOverride := flag.Int("workers", 0, "override number of worker threads (0 = use config)")
+	queueSizeOverride := flag.Int("queue-size", 0, "override size of processing queue (0 = use config)")
+	batchSizeOverride := flag.Int("batch-size", 0, "override message batch size (0 = use config)")
+	metricsAddrOverride := flag.String("metrics-addr", "", "override metrics server address (empty = use config)")
+	metricsPathOverride := flag.String("metrics-path", "", "override metrics endpoint path (empty = use config)")
+	metricsIntervalOverride := flag.Duration("metrics-interval", 0, "override metrics collection interval (0 = use config)")
 
-    // Initialize logger
-    logger, err := logger.NewLogger(&cfg.Logging)
-    if err != nil {
-        log.Fatalf("failed to initialize logger: %v", err)
-    }
-    defer logger.Sync()
+	flag.Parse()
 
-    // Initialize metrics
-    reg := prometheus.NewRegistry()
-    metricsService, err := metrics.NewMetrics(reg)
-    if err != nil {
-        logger.Fatal("failed to create metrics service", "error", err)
-    }
+	// Load configuration
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
 
-    // Create metrics collector for system metrics
-    metricsCollector := metrics.NewMetricsCollector(metricsService, *metricsInterval)
-    metricsCollector.Start()
-    defer metricsCollector.Stop()
+	// Apply any command line overrides
+	cfg.ApplyOverrides(
+		*workersOverride,
+		*queueSizeOverride,
+		*batchSizeOverride,
+		*metricsAddrOverride,
+		*metricsPathOverride,
+		*metricsIntervalOverride,
+	)
 
-    // Setup metrics HTTP server
-    mux := http.NewServeMux()
-    mux.Handle(*metricsPath, promhttp.HandlerFor(reg, promhttp.HandlerOpts{
-        Registry:          reg,
-        EnableOpenMetrics: true,
-    }))
+	// Initialize logger
+	logger, err := logger.NewLogger(&cfg.Logging)
+	if err != nil {
+		log.Fatalf("failed to initialize logger: %v", err)
+	}
+	defer logger.Sync()
 
-    metricsServer := &http.Server{
-        Addr:    *metricsAddr,
-        Handler: mux,
-    }
+	// Setup metrics if enabled
+	var metricsService *metrics.Metrics
+	var metricsCollector *metrics.MetricsCollector
+	var metricsServer *http.Server
 
-    // Start metrics server in a goroutine
-    go func() {
-        logger.Info("starting metrics server", 
-            "address", *metricsAddr,
-            "path", *metricsPath)
-        if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            logger.Error("metrics server error", "error", err)
-        }
-    }()
+	if cfg.Metrics.Enabled {
+		// Initialize metrics
+		reg := prometheus.NewRegistry()
+		metricsService, err = metrics.NewMetrics(reg)
+		if err != nil {
+			logger.Fatal("failed to create metrics service", "error", err)
+		}
 
-    // Setup signal handlers
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		// Parse metrics update interval
+		updateInterval, err := time.ParseDuration(cfg.Metrics.UpdateInterval)
+		if err != nil {
+			logger.Fatal("invalid metrics update interval", "error", err)
+		}
 
-    // Create broker with processing configuration
-    brokerCfg := broker.BrokerConfig{
-        ProcessorWorkers: *workers,
-        QueueSize:       *queueSize,
-        BatchSize:       *batchSize,
-    }
+		// Create metrics collector
+		metricsCollector = metrics.NewMetricsCollector(metricsService, updateInterval)
+		metricsCollector.Start()
+		defer metricsCollector.Stop()
 
-    mqttBroker, err := broker.NewBroker(cfg, logger, brokerCfg, metricsService)
-    if err != nil {
-        logger.Fatal("failed to create broker", "error", err)
-    }
+		// Setup metrics HTTP server
+		mux := http.NewServeMux()
+		mux.Handle(cfg.Metrics.Path, promhttp.HandlerFor(reg, promhttp.HandlerOpts{
+			Registry:          reg,
+			EnableOpenMetrics: true,
+		}))
 
-    // Create context with cancellation
-    ctx, cancel := context.WithCancel(context.Background())
-    defer cancel()
+		metricsServer = &http.Server{
+			Addr:    cfg.Metrics.Address,
+			Handler: mux,
+		}
 
-    // Load rules from directory
-    rulesLoader := rule.NewRulesLoader(logger)
-    rules, err := rulesLoader.LoadFromDirectory(*rulesPath)
-    if err != nil {
-        logger.Fatal("failed to load rules", "error", err)
-    }
+		// Start metrics server
+		go func() {
+			logger.Info("starting metrics server",
+				"address", cfg.Metrics.Address,
+				"path", cfg.Metrics.Path)
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("metrics server error", "error", err)
+			}
+		}()
+	}
 
-    // Start processing
-    if err := mqttBroker.Start(ctx, rules); err != nil {
-        logger.Fatal("failed to start broker", "error", err)
-    }
+	// Setup signal handlers
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-    logger.Info("mqtt-mux-router started",
-        "workers", *workers,
-        "queueSize", *queueSize,
-        "batchSize", *batchSize,
-        "rulesCount", len(rules),
-        "metricsAddr", *metricsAddr)
+	// Create broker with processing configuration
+	brokerCfg := broker.BrokerConfig{
+		ProcessorWorkers: cfg.Processing.Workers,
+		QueueSize:       cfg.Processing.QueueSize,
+		BatchSize:       cfg.Processing.BatchSize,
+	}
 
-    // Handle signals
-    for {
-        sig := <-sigChan
-        switch sig {
-        case syscall.SIGHUP:
-            logger.Info("received SIGHUP, reopening logs")
-            logger.Sync()
-        case syscall.SIGINT, syscall.SIGTERM:
-            logger.Info("shutting down...")
+	mqttBroker, err := broker.NewBroker(cfg, logger, brokerCfg, metricsService)
+	if err != nil {
+		logger.Fatal("failed to create broker", "error", err)
+	}
 
-            // Graceful shutdown
-            shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-            defer shutdownCancel()
+	// Create context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-            // Shutdown metrics server
-            if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-                logger.Error("failed to shutdown metrics server", "error", err)
-            }
+	// Load rules from directory
+	rulesLoader := rule.NewRulesLoader(logger)
+	rules, err := rulesLoader.LoadFromDirectory(*rulesPath)
+	if err != nil {
+		logger.Fatal("failed to load rules", "error", err)
+	}
 
-            // Shutdown other components
-            cancel()
-            mqttBroker.Close()
-            return
-        }
-    }
+	// Start processing
+	if err := mqttBroker.Start(ctx, rules); err != nil {
+		logger.Fatal("failed to start broker", "error", err)
+	}
+
+	logger.Info("mqtt-mux-router started",
+		"workers", cfg.Processing.Workers,
+		"queueSize", cfg.Processing.QueueSize,
+		"batchSize", cfg.Processing.BatchSize,
+		"rulesCount", len(rules),
+		"metricsEnabled", cfg.Metrics.Enabled)
+
+	// Handle signals
+	for {
+		sig := <-sigChan
+		switch sig {
+		case syscall.SIGHUP:
+			logger.Info("received SIGHUP, reopening logs")
+			logger.Sync()
+		case syscall.SIGINT, syscall.SIGTERM:
+			logger.Info("shutting down...")
+
+			// Graceful shutdown
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer shutdownCancel()
+
+			// Shutdown metrics server if enabled
+			if cfg.Metrics.Enabled && metricsServer != nil {
+				if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+					logger.Error("failed to shutdown metrics server", "error", err)
+				}
+			}
+
+			// Shutdown other components
+			cancel()
+			mqttBroker.Close()
+			return
+		}
+	}
 }

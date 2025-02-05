@@ -2,18 +2,29 @@
     "mqtt": {
         "broker": "ssl://mqtt.example.com:8883",
         "clientId": "mqtt-mux-router",
-        "username": "mqtt_user",
-        "password": "mqtt_password",
+        "username": "user",
+        "password": "pass",
         "tls": {
             "enable": true,
-            "certFile": "/path/to/client-cert.pem",
-            "keyFile": "/path/to/client-key.pem",
-            "caFile": "/path/to/ca.pem"
+            "certFile": "certs/client-cert.pem",
+            "keyFile": "certs/client-key.pem",
+            "caFile": "certs/ca.pem"
         }
     },
     "logging": {
         "level": "info",
         "outputPath": "/var/log/mqtt-mux-router/mqtt-mux-router.log",
         "encoding": "json"
+    },
+    "metrics": {
+        "enabled": true,
+        "address": ":2112",
+        "path": "/metrics",
+        "updateInterval": "15s"
+    },
+    "processing": {
+        "workers": 4,
+        "queueSize": 1000,
+        "batchSize": 100
     }
 }
