@@ -1,14 +1,23 @@
-[
-    {
-        "topic": "sensors/temperature",
-        "condition": {
-            "field": "temperature",
-            "operator": "gt",
-            "value": 30
-        },
-        "action": {
-            "topic": "alerts/temperature",
-            "payload": "{\"alert\":\"High temperature detected!\",\"value\":${temperature}}"
-        }
+{
+    "topic": "sensors/+/temperature",
+    "sourceBroker": "source1",
+    "description": "Temperature alerts",
+    "enabled": true,
+    "conditions": {
+        "operator": "and",
+        "items": [
+            {
+                "field": "temperature",
+                "operator": "gt",
+                "value": 30
+            }
+        ]
+    },
+    "action": {
+        "topic": "alerts/${device_id}/temperature",
+        "targetBroker": "target1",
+        "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature}}",
+        "qos": 1,
+        "retain": false
     }
-]
+}
