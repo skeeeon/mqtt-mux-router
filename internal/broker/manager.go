@@ -1,5 +1,4 @@
 //file: internal/broker/manager.go
-
 package broker
 
 import (

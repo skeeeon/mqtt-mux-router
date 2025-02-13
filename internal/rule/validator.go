@@ -1,11 +1,18 @@
 //file: internal/rule/validator.go
-
 package rule
 
 import (
 	"fmt"
 	"regexp"
 	"strings"
+)
+
+var (
+	// validVariablePattern matches valid variable names:
+	// - Must start with a letter or underscore
+	// - Can contain letters, numbers, underscores
+	// - Can have dot notation for nested fields
+	validVariablePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$`)
 )
 
 // validateRule performs comprehensive validation of a rule
@@ -34,14 +41,6 @@ func validateRule(rule *Rule) error {
 	if rule.Conditions != nil {
 		if err := validateConditions(rule.Conditions); err != nil {
 			return err
-		}
-	}
-
-	// Validate priority
-	if rule.Priority < 0 {
-		return &RuleValidationError{
-			Field:   "priority",
-			Message: "priority cannot be negative",
 		}
 	}
 
@@ -113,29 +112,19 @@ func validateAction(action *Action) error {
 		}
 	}
 
+	// Validate topic template
+	if err := validateTemplate(action.Topic); err != nil {
+		return &RuleValidationError{
+			Field:   "action.topic",
+			Message: err.Error(),
+		}
+	}
+
 	// Validate payload template
 	if err := validateTemplate(action.Payload); err != nil {
 		return &RuleValidationError{
 			Field:   "action.payload",
 			Message: err.Error(),
-		}
-	}
-
-	// Validate headers if present
-	if action.Headers != nil {
-		for key, value := range action.Headers {
-			if key == "" {
-				return &RuleValidationError{
-					Field:   "action.headers",
-					Message: "header key cannot be empty",
-				}
-			}
-			if err := validateTemplate(value); err != nil {
-				return &RuleValidationError{
-					Field:   fmt.Sprintf("action.headers[%s]", key),
-					Message: err.Error(),
-				}
-			}
 		}
 	}
 
@@ -233,7 +222,5 @@ func validateTemplate(template string) error {
 
 // isValidVariableName checks if a variable name is valid
 func isValidVariableName(name string) bool {
-	// Allow alphanumeric, underscore, and dot in variable names
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_]+(.[a-zA-Z0-9_]+)*$`, name)
-	return matched
+	return validVariablePattern.MatchString(name)
 }

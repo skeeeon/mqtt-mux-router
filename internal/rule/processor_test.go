@@ -1,3 +1,4 @@
+//file: internal/rule/processor_test.go
 package rule
 
 import (
@@ -173,7 +174,7 @@ func TestProcessorMessageProcessing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			results, err := processor.Process(tt.message)
-			
+
 			if (err != nil) != tt.wantError {
 				t.Errorf("Process() error = %v, wantError %v", err, tt.wantError)
 				return
@@ -203,10 +204,6 @@ func TestProcessorTemplateProcessing(t *testing.T) {
 			Topic:        "processed/${device_id}/status/${status}",
 			TargetBroker: "target1",
 			Payload:      `{"device":"${device_id}","status":"${status}","timestamp":"${timestamp}"}`,
-			Headers: map[string]string{
-				"device": "${device_id}",
-				"type":   "status",
-			},
 		},
 	}
 
@@ -263,12 +260,12 @@ func TestProcessorTemplateProcessing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			results, err := processor.Process(tt.message)
-			
+
 			if tt.wantError && err == nil {
 				t.Error("Process() expected error but got none")
 				return
 			}
-			
+
 			if !tt.wantError && err != nil {
 				t.Fatalf("Process() unexpected error = %v", err)
 			}
@@ -297,7 +294,7 @@ func TestProcessorTemplateProcessing(t *testing.T) {
 					t.Errorf("Payload missing key %q", key)
 					continue
 				}
-				
+
 				// Convert values to strings for comparison
 				wantStr := fmt.Sprintf("%v", want)
 				gotStr := fmt.Sprintf("%v", got)
@@ -310,20 +307,6 @@ func TestProcessorTemplateProcessing(t *testing.T) {
 			for key := range payload {
 				if _, exists := tt.wantValues[key]; !exists {
 					t.Errorf("Payload contains unexpected key %q", key)
-				}
-			}
-
-			// Check header template processing
-			deviceID, exists := result.Headers["device"]
-			if !exists {
-				t.Error("Headers missing 'device' key")
-			} else {
-				expectedDeviceID := fmt.Sprintf("%v", tt.message.Values["device_id"])
-				if deviceID != expectedDeviceID {
-					t.Errorf("Headers[device] = %q, want %q (original device_id: %v)", 
-						deviceID, 
-						expectedDeviceID, 
-						tt.message.Values["device_id"])
 				}
 			}
 		})
@@ -502,8 +485,8 @@ func TestProcessorSourceBrokerFiltering(t *testing.T) {
 			},
 		},
 		{
-			Topic:        "test/any",
-			Enabled:      true,
+			Topic:   "test/any",
+			Enabled: true,
 			Action: &Action{
 				Topic:        "processed/any",
 				TargetBroker: "target1",
@@ -599,9 +582,9 @@ func TestProcessorErrorHandling(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		message    *ProcessedMessage
-		expectErr  string
+		name      string
+		message   *ProcessedMessage
+		expectErr string
 	}{
 		{
 			name: "Malformed JSON in Values",
@@ -625,8 +608,8 @@ func TestProcessorErrorHandling(t *testing.T) {
 			expectErr: "required template variable 'required_var' not found",
 		},
 		{
-			name:    "Nil message",
-			message: nil,
+			name:      "Nil message",
+			message:   nil,
 			expectErr: "message is nil",
 		},
 		{
@@ -643,11 +626,11 @@ func TestProcessorErrorHandling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			results, err := processor.Process(tt.message)
-			
+
 			if tt.expectErr == "" && err != nil {
 				t.Errorf("Process() unexpected error = %v", err)
 			}
-			
+
 			if tt.expectErr != "" {
 				if err == nil {
 					t.Errorf("Process() expected error containing %q, got nil", tt.expectErr)

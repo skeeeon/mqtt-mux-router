@@ -1,5 +1,4 @@
 //file: internal/rule/types_test.go
-
 package rule
 
 import (
@@ -10,9 +9,9 @@ import (
 
 func TestRuleValidation(t *testing.T) {
 	tests := []struct {
-		name    string
-		rule    Rule
-		wantErr bool
+		name     string
+		rule     Rule
+		wantErr  bool
 		errField string
 	}{
 		{
@@ -52,7 +51,7 @@ func TestRuleValidation(t *testing.T) {
 					QoS:   1,
 				},
 			},
-			wantErr: true,
+			wantErr:  true,
 			errField: "action.targetBroker",
 		},
 		{
@@ -66,7 +65,7 @@ func TestRuleValidation(t *testing.T) {
 					QoS:          3,
 				},
 			},
-			wantErr: true,
+			wantErr:  true,
 			errField: "action.qos",
 		},
 		{
@@ -79,7 +78,7 @@ func TestRuleValidation(t *testing.T) {
 					TargetBroker: "target1",
 				},
 			},
-			wantErr: true,
+			wantErr:  true,
 			errField: "topic",
 		},
 		{
@@ -89,7 +88,7 @@ func TestRuleValidation(t *testing.T) {
 				SourceBroker: "source1",
 				Enabled:      true,
 			},
-			wantErr: true,
+			wantErr:  true,
 			errField: "action",
 		},
 	}
@@ -247,21 +246,15 @@ func TestRuleSetSerialization(t *testing.T) {
 				SourceBroker: "source1",
 				Description:  "Temperature alerts",
 				Enabled:      true,
-				Priority:     1,
 				CreatedAt:    now,
-				UpdatedAt:    now,
 				Action: &Action{
 					Topic:        "alerts/${topic}",
 					TargetBroker: "target1",
 					QoS:          1,
-					Headers: map[string]string{
-						"type": "temperature",
-					},
 				},
 			},
 		},
 		CreatedAt: now,
-		UpdatedAt: now,
 	}
 
 	// Test marshaling
@@ -308,7 +301,6 @@ func TestRuleSetSerialization(t *testing.T) {
 }
 
 func TestMatchResult(t *testing.T) {
-	now := time.Now()
 	rule := &Rule{
 		Topic:        "sensors/+/temperature",
 		SourceBroker: "source1",
@@ -327,11 +319,8 @@ func TestMatchResult(t *testing.T) {
 			QoS:          1,
 		},
 		Variables: map[string]interface{}{
-			"device_id": "device123",
+			"device_id":   "device123",
 			"temperature": 25.5,
-		},
-		Headers: map[string]string{
-			"timestamp": now.Format(time.RFC3339),
 		},
 	}
 
@@ -346,10 +335,6 @@ func TestMatchResult(t *testing.T) {
 
 	if val, ok := result.Variables["device_id"]; !ok || val != "device123" {
 		t.Errorf("Variables[device_id] = %v, want device123", val)
-	}
-
-	if val, ok := result.Headers["timestamp"]; !ok || val == "" {
-		t.Errorf("Headers[timestamp] missing or empty")
 	}
 }
 
@@ -375,9 +360,6 @@ func TestProcessedMessage(t *testing.T) {
 			"humidity":    60.0,
 		},
 		Timestamp: time.Now(),
-		Headers: map[string]string{
-			"device_id": "device123",
-		},
 	}
 
 	// Test message fields
@@ -395,9 +377,6 @@ func TestProcessedMessage(t *testing.T) {
 	}
 	if msg.Timestamp.IsZero() {
 		t.Error("Timestamp is zero")
-	}
-	if len(msg.Headers) == 0 {
-		t.Error("Headers is empty")
 	}
 
 	// Test values

@@ -40,52 +40,9 @@ go build -o mqtt-mux-router ./cmd/mqtt-mux-router
 ./mqtt-mux-router -config config/config.json
 ```
 
-## Project Structure
-
-```
-mqtt-mux-router/
-├── cmd/
-│   └── mqtt-mux-router/
-│       └── main.go                # Application entry point
-├── config/
-│   ├── config.go                  # Configuration structures
-│   └── config.example.json        # Example configuration
-├── internal/
-│   ├── broker/
-│   │   ├── types.go              # Broker types and interfaces
-│   │   ├── manager.go            # Multi-broker management
-│   │   └── subscription.go       # Topic subscription handling
-│   ├── rule/
-│   │   ├── types.go              # Rule data structures
-│   │   ├── processor.go          # Rule processing and worker pool
-│   │   ├── index.go              # Rule indexing and lookup
-│   │   ├── evaluator.go          # Condition evaluation
-│   │   ├── pool.go               # Object pooling
-│   │   ├── loader.go             # Rule file loading
-│   │   └── validator.go          # Rule validation
-│   ├── logger/
-│   │   └── logger.go             # Logging implementation
-│   ├── metrics/
-│   │   ├── metrics.go            # Prometheus metrics definitions
-│   │   └── collector.go          # Metrics collection
-│   └── stats/
-│       └── stats.go              # Performance metrics
-├── rules/                        # Directory for rule files
-│   └── example.json
-├── go.mod
-└── README.md
-```
-
-## Prerequisites
-
-- Go 1.21 or higher
-- MQTT Broker(s) (e.g., Mosquitto, EMQ X)
-- SSL certificates (if using TLS)
-- Prometheus (optional, for metrics collection)
-
 ## Configuration
 
-The application uses a comprehensive configuration file with optional command-line overrides for operational flexibility. Backward compatibility is maintained for single-broker configurations.
+The application uses a comprehensive configuration file with optional command-line overrides for operational flexibility.
 
 ### Configuration File Structure
 
@@ -132,76 +89,6 @@ The application uses a comprehensive configuration file with optional command-li
 }
 ```
 
-### Configuration Requirements
-
-#### Broker Configuration
-- At least one source broker (role: "source" or "both") is required
-- At least one target broker (role: "target" or "both") is required
-- Each broker must have a unique ID that matches its map key
-- `address` and `clientId` are required for each broker
-- When TLS is enabled, all TLS fields (certFile, keyFile, caFile) are required
-
-#### Logging Configuration
-Default values if not specified:
-- `level`: "info"
-- `outputPath`: "stdout"
-- `encoding`: "json"
-
-Valid log levels: "debug", "info", "warn", "error"
-
-#### Metrics Configuration
-Default values if not specified:
-- `enabled`: false
-- `address`: ":2112"
-- `path`: "/metrics"
-- `updateInterval`: "15s"
-
-The updateInterval must be a valid Go duration string (e.g., "10s", "1m", "500ms")
-
-#### Processing Configuration
-Default values if not specified:
-- `workers`: number of CPU cores
-- `queueSize`: 1000
-- `batchSize`: 100
-
-### Backward Compatibility
-
-The configuration supports backward compatibility for single-broker setups. The following legacy format is automatically converted:
-
-```json
-{
-    "mqtt": {
-        "broker": "ssl://mqtt.example.com:8883",
-        "clientId": "mqtt-mux-router",
-        "username": "user",
-        "password": "pass",
-        "tls": {
-            "enable": true,
-            "certFile": "certs/client-cert.pem",
-            "keyFile": "certs/client-key.pem",
-            "caFile": "certs/ca.pem"
-        }
-    },
-    "logging": {
-        "level": "info",
-        "outputPath": "stdout",
-        "encoding": "json"
-    },
-    "metrics": {
-        "enabled": true,
-        "address": ":2112",
-        "path": "/metrics"
-    },
-    "processing": {
-        "workers": 4,
-        "queueSize": 1000,
-        "batchSize": 100
-    }
-}
-```
-
-This legacy format is automatically converted to a multi-broker configuration with a single broker having the role "both".
-
 ## Rule Configuration
 
 Rules define message routing and transformation logic between brokers. Rules can be defined individually or grouped in rule sets.
@@ -214,7 +101,6 @@ Rules define message routing and transformation logic between brokers. Rules can
     "sourceBroker": "source1",            // Optional: defaults to any source broker
     "description": "Temperature alerts",   // Optional: rule description
     "enabled": true,                      // Required: rule status
-    "priority": 1,                        // Optional: processing priority (default: 0)
     "conditions": {
         "operator": "and",
         "items": [
@@ -230,14 +116,9 @@ Rules define message routing and transformation logic between brokers. Rules can
         "targetBroker": "target1",        // Required: must be a target/both broker
         "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature}}",
         "qos": 1,
-        "retain": false,
-        "headers": {                       // Optional: custom headers
-            "type": "temperature_alert",
-            "severity": "high"
-        }
+        "retain": false
     },
-    "createdAt": "2024-02-12T12:00:00Z",  // Managed by system
-    "updatedAt": "2024-02-12T12:00:00Z"   // Managed by system
+    "createdAt": "2024-02-12T12:00:00Z"  // Managed by system
 }
 ```
 
@@ -256,8 +137,7 @@ Multiple rules can be grouped in a rule set:
             // ... rule fields as above
         }
     ],
-    "createdAt": "2024-02-12T12:00:00Z",
-    "updatedAt": "2024-02-12T12:00:00Z"
+    "createdAt": "2024-02-12T12:00:00Z"
 }
 ```
 
@@ -302,13 +182,6 @@ Comparison operators for field values:
 - `contains`: String contains value
 - `matches`: Regular expression match
 
-Values are automatically converted for comparison:
-- Numbers compared numerically
-- Strings compared lexicographically
-- Booleans compared as true > false
-- Mixed types use string comparison
-- Null values handled appropriately
-
 ### Logical Operators
 
 Conditions can be combined using logical operators:
@@ -346,95 +219,33 @@ Conditions can be nested:
 }
 ```
 
-### Broker Targeting
-
-Rules can specify source and target brokers:
-
-- Source Broker (`sourceBroker`):
-  - Optional field
-  - When specified, rule only matches messages from that broker
-  - Must reference a broker with role "source" or "both"
-  - When omitted, matches messages from any source broker
-
-- Target Broker (`targetBroker`):
-  - Required field
-  - Must reference a broker with role "target" or "both"
-  - Error if broker doesn't exist or has incompatible role
-
-### Rule Validation
-
-Rules are validated when loaded:
-- Topic patterns must be valid MQTT topics
-- Wildcards must follow MQTT rules
-- Conditions must use valid operators
-- Template variables must be valid
-- Broker references must be valid
-- Required fields must be present
-- QoS must be 0, 1, or 2
-
-### System Fields
-
-Some fields are managed by the system:
-- `createdAt`: Set when rule is first loaded
-- `updatedAt`: Updated when rule is modified
-- Both use RFC3339 format timestamps
-- Cannot be set manually in rule files
-
-### Processing Behavior
-
-- Rules are processed in priority order (higher numbers first)
-- Within same priority, order is undefined
-- Disabled rules are skipped
-- All matching rules are processed
-- Processing continues after action errors
-- Template errors prevent action execution
-
-## Metrics
-
-The router exposes Prometheus metrics for monitoring system health and performance:
-
-### Available Metrics
-
-1. Broker Metrics:
-- `mqtt_connection_status` (gauge) - Connection status by broker ID
-- `mqtt_reconnects_total` (counter) - Reconnection attempts by broker
-- `mqtt_messages_total` (counter) - Messages by broker and direction
-- `mqtt_broker_errors_total` (counter) - Errors by broker and type
-
-2. Message Processing:
-- `messages_total` (counter) - Total messages by status
-- `message_queue_depth` (gauge) - Current processing queue depth
-- `message_processing_backlog` (gauge) - Processing backlog
-
-3. Rule Engine:
-- `rule_matches_total` (counter) - Rule matches by topic
-- `rules_active` (gauge) - Active rules by type
-- `routing_success_total` (counter) - Successful message routes
-- `routing_errors_total` (counter) - Failed message routes
-
-4. System:
-- `process_goroutines` (gauge) - Current goroutines
-- `process_memory_bytes` (gauge) - Memory usage
-- `worker_pool_active` (gauge) - Active workers
-
-### Prometheus Configuration
-
-Example Prometheus configuration:
-```yaml
-scrape_configs:
-  - job_name: 'mqtt-mux-router'
-    static_configs:
-      - targets: ['localhost:2112']
-    metrics_path: '/metrics'
-    scrape_interval: 15s
-```
-
 ## Performance Characteristics
 
-Typical throughput on modern hardware (4 cores, 8GB RAM):
+### Message Processing Pipeline
+
+1. Message Reception
+   - Efficient MQTT client connection handling
+   - Queue-based message buffering
+   - Automatic backpressure handling
+
+2. Rule Matching
+   - Optimized topic tree for fast pattern matching
+   - In-memory rule index
+   - Parallel rule evaluation
+
+3. Action Execution
+   - Efficient template processing
+   - Worker pool for parallel action execution
+   - Message batching for improved throughput
+
+### Typical Performance
+
+On modern hardware (4 cores, 8GB RAM):
 - Simple Rules: ~2,000-4,000 messages/second/broker
 - Complex Rules: ~600-1,000 messages/second/broker
 - Multi-broker Setup: Scales linearly with CPU cores
+
+### Memory Usage
 
 Memory usage is optimized through:
 - Object pooling for messages and results
@@ -442,30 +253,29 @@ Memory usage is optimized through:
 - Controlled worker pools
 - Configurable batch processing
 
-### Performance Tuning
+### Tuning Guidelines
 
-#### Worker Pool Configuration
-- `workers`: Set based on available CPU cores and number of brokers
-- Recommended: CPU cores × 1.5 for compute-heavy rules
-- Recommended: CPU cores × 2-4 for I/O-heavy rules
+1. Worker Pool Configuration
+   - Set workers based on available CPU cores
+   - Recommended: CPU cores × 1.5 for compute-heavy rules
+   - Recommended: CPU cores × 2-4 for I/O-heavy rules
 
-#### Queue Size Tuning
-- `queueSize`: Buffer size for message spikes
-- Increase for high-throughput scenarios
-- Monitor memory usage when increasing
-- Recommended: 1000-5000 per broker for most use cases
+2. Queue Size
+   - Buffer size for message spikes
+   - Default: 1000 messages
+   - Increase for high-throughput scenarios
+   - Monitor memory usage when increasing
 
-#### Batch Processing
-- `batchSize`: Number of messages processed in batch
-- Larger batches improve throughput but increase latency
-- Smaller batches reduce latency but may lower throughput
-- Recommended: 100-500 for balanced performance
+3. Batch Processing
+   - Controls message processing batch size
+   - Default: 100 messages
+   - Larger batches = higher throughput, higher latency
+   - Smaller batches = lower latency, lower throughput
 
-#### Memory Management
-- Monitor `process_memory_bytes` metric
-- Adjust queue sizes if memory pressure is high
-- Consider reducing batch sizes if GC pressure is high
-- Set appropriate limits for number of concurrent connections
+4. Memory Management
+   - Monitor `process_memory_bytes` metric
+   - Adjust queue sizes if memory pressure is high
+   - Consider reducing batch sizes if GC pressure is high
 
 ## Contributing
 

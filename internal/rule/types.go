@@ -14,9 +14,7 @@ type Rule struct {
 	Enabled      bool        `json:"enabled"`     // Whether the rule is active
 	Conditions   *Conditions `json:"conditions"`  // Optional conditions for rule matching
 	Action       *Action     `json:"action"`      // Required action to take on match
-	Priority     int         `json:"priority"`    // Optional priority for rule ordering
 	CreatedAt    time.Time   `json:"createdAt"`  // When the rule was created
-	UpdatedAt    time.Time   `json:"updatedAt"`  // When the rule was last updated
 }
 
 // Conditions represents a group of conditions with a logical operator
@@ -35,12 +33,11 @@ type Condition struct {
 
 // Action represents an action to take when a rule matches
 type Action struct {
-	Topic        string            `json:"topic"`        // Target topic pattern
-	TargetBroker string            `json:"targetBroker"` // Required, must be a target/both broker
-	Payload      string            `json:"payload"`      // Template for the target payload
-	QoS          byte             `json:"qos"`          // MQTT QoS level (0, 1, or 2)
-	Retain       bool             `json:"retain"`       // Whether to retain the message
-	Headers      map[string]string `json:"headers,omitempty"` // Optional headers to add
+	Topic        string  `json:"topic"`        // Target topic pattern
+	TargetBroker string  `json:"targetBroker"` // Required, must be a target/both broker
+	Payload      string  `json:"payload"`      // Template for the target payload
+	QoS          byte    `json:"qos"`          // MQTT QoS level (0, 1, or 2)
+	Retain       bool    `json:"retain"`       // Whether to retain the message
 }
 
 // RuleValidationError represents a rule validation error
@@ -61,7 +58,6 @@ type ProcessedMessage struct {
 	Payload      []byte
 	Values       map[string]interface{}
 	Timestamp    time.Time
-	Headers      map[string]string
 }
 
 // MatchResult represents the result of a rule match
@@ -69,7 +65,6 @@ type MatchResult struct {
 	Rule      *Rule
 	Action    *Action
 	Variables map[string]interface{}
-	Headers   map[string]string
 }
 
 // RuleSet represents a collection of rules with metadata
@@ -79,7 +74,6 @@ type RuleSet struct {
 	Version     string    `json:"version"`
 	Rules       []Rule    `json:"rules"`
 	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // Constants for condition operators

@@ -1,27 +1,17 @@
 //file: internal/rule/processor.go
-
 package rule
 
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"regexp"
 
 	"mqtt-mux-router/internal/logger"
 	"mqtt-mux-router/internal/metrics"
 )
-
-// getMapKeys returns a sorted list of map keys
-func getMapKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
 
 // Processor handles rule processing and message routing
 type Processor struct {
@@ -72,101 +62,89 @@ func (p *Processor) Stop() {
 
 // Process processes a message against loaded rules
 func (p *Processor) Process(msg *ProcessedMessage) ([]*MatchResult, error) {
-    // Check for nil message
-    if msg == nil {
-        return nil, fmt.Errorf("message is nil")
-    }
+	if msg == nil {
+		return nil, fmt.Errorf("message is nil")
+	}
 
-    // Check for empty topic
-    if msg.Topic == "" {
-        return nil, fmt.Errorf("message topic is empty")
-    }
+	if msg.Topic == "" {
+		return nil, fmt.Errorf("message topic is empty")
+	}
 
-    atomic.AddUint64(&p.stats.Processed, 1)
+	atomic.AddUint64(&p.stats.Processed, 1)
 
-    // Validate message values
-    if msg.Values == nil {
-        msg.Values = make(map[string]interface{})
-    }
+	// Validate message values
+	if msg.Values == nil {
+		msg.Values = make(map[string]interface{})
+	}
 
-    // If payload is present but Values is empty, try to unmarshal
-    if len(msg.Payload) > 0 && len(msg.Values) == 0 {
-        if err := json.Unmarshal(msg.Payload, &msg.Values); err != nil {
-            atomic.AddUint64(&p.stats.Errors, 1)
-            p.logger.Error("failed to unmarshal payload",
-                "error", err,
-                "topic", msg.Topic)
-            return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
-        }
-    }
+	// If payload is present but Values is empty, try to unmarshal
+	if len(msg.Payload) > 0 && len(msg.Values) == 0 {
+		if err := json.Unmarshal(msg.Payload, &msg.Values); err != nil {
+			atomic.AddUint64(&p.stats.Errors, 1)
+			p.logger.Error("failed to unmarshal payload",
+				"error", err,
+				"topic", msg.Topic)
+			return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+		}
+	}
 
-    // Find matching rules
-    rules := p.index.Find(msg.Topic)
-    if len(rules) == 0 {
-        return nil, nil
-    }
+	// Find matching rules
+	rules := p.index.Find(msg.Topic)
+	if len(rules) == 0 {
+		return nil, nil
+	}
 
-    var lastErr error
-    results := make([]*MatchResult, 0, len(rules))
+	var lastErr error
+	results := make([]*MatchResult, 0, len(rules))
 
-    // Process each matching rule
-    for _, rule := range rules {
-        // Skip disabled rules
-        if !rule.Enabled {
-            continue
-        }
+	// Process each matching rule
+	for _, rule := range rules {
+		// Skip disabled rules
+		if !rule.Enabled {
+			continue
+		}
 
-        // Check source broker if specified
-        if rule.SourceBroker != "" && rule.SourceBroker != msg.SourceBroker {
-            continue
-        }
+		// Check source broker if specified
+		if rule.SourceBroker != "" && rule.SourceBroker != msg.SourceBroker {
+			continue
+		}
 
-        // Evaluate conditions
-        if rule.Conditions != nil && !evaluateConditions(rule.Conditions, msg) {
-            continue
-        }
+		// Evaluate conditions
+		if rule.Conditions != nil && !evaluateConditions(rule.Conditions, msg) {
+			continue
+		}
 
-        // Process action template
-        action, err := p.processActionTemplate(rule.Action, msg)
-        if err != nil {
-            atomic.AddUint64(&p.stats.Errors, 1)
-            p.logger.Error("failed to process action template",
-                "error", err,
-                "topic", msg.Topic,
-                "rule", rule.Topic)
-            // Store error but continue processing other rules
-            lastErr = err
-            continue
-        }
+		// Process action template
+		action, err := p.processActionTemplate(rule.Action, msg)
+		if err != nil {
+			atomic.AddUint64(&p.stats.Errors, 1)
+			p.logger.Error("failed to process action template",
+				"error", err,
+				"topic", msg.Topic,
+				"rule", rule.Topic)
+			lastErr = err
+			continue
+		}
 
-        result := &MatchResult{
-            Rule:      rule,
-            Action:    action,
-            Variables: msg.Values,
-            Headers:   make(map[string]string),
-        }
+		results = append(results, &MatchResult{
+			Rule:      rule,
+			Action:    action,
+			Variables: msg.Values,
+		})
 
-        // Copy any processed headers from the action
-        if action.Headers != nil {
-            for k, v := range action.Headers {
-                result.Headers[k] = v
-            }
-        }
+		atomic.AddUint64(&p.stats.Matched, 1)
 
-        results = append(results, result)
-        atomic.AddUint64(&p.stats.Matched, 1)
+		if p.metrics != nil {
+			p.metrics.IncRuleMatches()
+		}
+	}
 
-        if p.metrics != nil {
-            p.metrics.IncRuleMatches()
-        }
-    }
+	// If we have processed rules but encountered errors, return the error
+	if len(results) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
 
-    // If we have processed rules but encountered errors, return the error
-    if len(results) == 0 && lastErr != nil {
-        return nil, lastErr
-    }
-
-    return results, nil
+	return results, nil
 }
 
 // processActionTemplate processes template variables in the action
@@ -198,25 +176,8 @@ func (p *Processor) processActionTemplate(action *Action, msg *ProcessedMessage)
 		result.Payload = payload
 	}
 
-	// Process header templates - variables are optional like payload
-	if action.Headers != nil {
-		result.Headers = make(map[string]string)
-		for k, v := range action.Headers {
-			processed, err := p.processTemplate(v, msg.Values, false)
-			if err != nil {
-				return nil, fmt.Errorf("failed to process header template '%s': %w", k, err)
-			}
-			result.Headers[k] = processed
-		}
-
-		p.logger.Debug("processed headers",
-			"originalHeaders", action.Headers,
-			"processedHeaders", result.Headers)
-	}
-
 	p.logger.Debug("action template processing complete",
-		"topic", result.Topic,
-		"headersCount", len(result.Headers))
+		"topic", result.Topic)
 
 	return result, nil
 }
@@ -330,4 +291,13 @@ func (p *Processor) convertValueToString(value interface{}) string {
 		// Fallback to simple string conversion
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// getMapKeys returns a sorted list of map keys
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

@@ -1,5 +1,4 @@
 //file: internal/rule/index.go
-
 package rule
 
 import (
@@ -25,12 +24,12 @@ type RuleIndex struct {
 
 // IndexStats tracks rule index statistics
 type IndexStats struct {
-	RuleCount    uint64    // Total number of rules
-	Lookups      uint64    // Number of topic lookups
-	Matches      uint64    // Number of successful matches
-	LastUpdate   time.Time // Last index update time
-	LastError    error     // Last error encountered
-	WildcardRules uint64   // Number of wildcard rules
+	RuleCount     uint64    // Total number of rules
+	Lookups       uint64    // Number of topic lookups
+	Matches       uint64    // Number of successful matches
+	LastUpdate    time.Time // Last index update time
+	LastError     error     // Last error encountered
+	WildcardRules uint64    // Number of wildcard rules
 }
 
 // NewRuleIndex creates a new rule index
@@ -70,6 +69,7 @@ func (idx *RuleIndex) Add(rule *Rule) error {
 		}
 		atomic.AddUint64(&idx.stats.WildcardRules, 1)
 	} else {
+		// Add rule to exact matches
 		idx.exactMatches[rule.Topic] = append(idx.exactMatches[rule.Topic], rule)
 	}
 
