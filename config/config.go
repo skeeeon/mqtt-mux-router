@@ -1,3 +1,4 @@
+//file: config/config.go
 package config
 
 import (
@@ -25,9 +26,9 @@ type MetricsConfig struct {
 
 // ProcConfig defines message processing configuration
 type ProcConfig struct {
-	Workers    int `json:"workers"`
-	QueueSize  int `json:"queueSize"`
-	BatchSize  int `json:"batchSize"`
+	Workers   int `json:"workers"`
+	QueueSize int `json:"queueSize"`
+	BatchSize int `json:"batchSize"`
 }
 
 // BrokerRole defines the role of an MQTT broker in the system
@@ -45,10 +46,10 @@ const (
 // Config represents the main application configuration
 type Config struct {
 	// Brokers is a map of broker configurations keyed by broker ID
-	Brokers map[string]BrokerConfig `json:"brokers"`
-	Logging LogConfig               `json:"logging"`
-	Metrics MetricsConfig          `json:"metrics"`
-	Processing ProcConfig          `json:"processing"`
+	Brokers    map[string]BrokerConfig `json:"brokers"`
+	Logging    LogConfig               `json:"logging"`
+	Metrics    MetricsConfig           `json:"metrics"`
+	Processing ProcConfig              `json:"processing"`
 }
 
 // BrokerConfig represents the configuration for a single MQTT broker
@@ -133,9 +134,35 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Handle backward compatibility for single broker configuration
-	if len(config.Brokers) == 0 {
-		// Convert old single-broker config to new format
+	// Check if we have a modern multi-broker configuration
+	if len(config.Brokers) > 0 {
+		// Validate broker configurations
+		for id, broker := range config.Brokers {
+			if err := validateBrokerConfig(id, broker); err != nil {
+				return nil, fmt.Errorf("invalid broker configuration: %w", err)
+			}
+		}
+
+		// Ensure at least one source and one target broker
+		hasSource := false
+		hasTarget := false
+		for _, broker := range config.Brokers {
+			if broker.Role == BrokerRoleSource || broker.Role == BrokerRoleBoth {
+				hasSource = true
+			}
+			if broker.Role == BrokerRoleTarget || broker.Role == BrokerRoleBoth {
+				hasTarget = true
+			}
+		}
+
+		if !hasSource {
+			return nil, fmt.Errorf("configuration must include at least one source broker")
+		}
+		if !hasTarget {
+			return nil, fmt.Errorf("configuration must include at least one target broker")
+		}
+	} else {
+		// Try legacy single-broker config
 		var oldConfig struct {
 			MQTT struct {
 				Broker   string     `json:"broker"`
@@ -144,12 +171,19 @@ func Load(path string) (*Config, error) {
 				Password string     `json:"password,omitempty"`
 				TLS      *TLSConfig `json:"tls,omitempty"`
 			} `json:"mqtt"`
-			Logging    LogConfig      `json:"logging"`
-			Metrics    MetricsConfig  `json:"metrics"`
-			Processing ProcConfig     `json:"processing"`
+			Logging    LogConfig     `json:"logging"`
+			Metrics    MetricsConfig `json:"metrics"`
+			Processing ProcConfig    `json:"processing"`
 		}
+
+		// Try to parse legacy format
 		if err := json.Unmarshal(data, &oldConfig); err != nil {
 			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+
+		// Validate legacy broker configuration
+		if oldConfig.MQTT.Broker == "" {
+			return nil, fmt.Errorf("invalid configuration: mqtt broker address is required")
 		}
 
 		// Convert old MQTT config to new broker config
@@ -169,32 +203,6 @@ func Load(path string) (*Config, error) {
 		config.Logging = oldConfig.Logging
 		config.Metrics = oldConfig.Metrics
 		config.Processing = oldConfig.Processing
-	}
-
-	// Validate broker configurations
-	for id, broker := range config.Brokers {
-		if err := validateBrokerConfig(id, broker); err != nil {
-			return nil, fmt.Errorf("invalid broker configuration: %w", err)
-		}
-	}
-
-	// Ensure at least one source and one target broker
-	hasSource := false
-	hasTarget := false
-	for _, broker := range config.Brokers {
-		if broker.Role == BrokerRoleSource || broker.Role == BrokerRoleBoth {
-			hasSource = true
-		}
-		if broker.Role == BrokerRoleTarget || broker.Role == BrokerRoleBoth {
-			hasTarget = true
-		}
-	}
-
-	if !hasSource {
-		return nil, fmt.Errorf("configuration must include at least one source broker")
-	}
-	if !hasTarget {
-		return nil, fmt.Errorf("configuration must include at least one target broker")
 	}
 
 	// Set defaults for logging
@@ -257,7 +265,7 @@ func (c *Config) ApplyOverrides(workers, queueSize, batchSize int, metricsAddr, 
 
 // GetDefaultSourceBroker returns the first available source broker configuration
 func (c *Config) GetDefaultSourceBroker() (*BrokerConfig, error) {
-	        for _, broker := range c.Brokers {
+	for _, broker := range c.Brokers {
 		if broker.Role == BrokerRoleSource || broker.Role == BrokerRoleBoth {
 			// Return a copy to prevent modification
 			b := broker
