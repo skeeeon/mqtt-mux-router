@@ -3,333 +3,331 @@
 package rule
 
 import (
-    "encoding/json"
-    "fmt"
-    "regexp"
-    "strconv"
-    "strings"
-    "sync"
-    "sync/atomic"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"regexp"
 
-    "github.com/google/uuid"
-    "mqtt-mux-router/internal/logger"
-    "mqtt-mux-router/internal/metrics"
+	"mqtt-mux-router/internal/logger"
+	"mqtt-mux-router/internal/metrics"
 )
 
-type ProcessorConfig struct {
-    Workers    int
-    QueueSize  int
-    BatchSize  int
+// getMapKeys returns a sorted list of map keys
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
+// Processor handles rule processing and message routing
 type Processor struct {
-    index      *RuleIndex
-    msgPool    *MessagePool
-    resultPool *ResultPool
-    workers    int
-    jobChan    chan *ProcessingMessage
-    logger     *logger.Logger
-    metrics    *metrics.Metrics
-    stats      ProcessorStats
-    wg         sync.WaitGroup
+	index      *RuleIndex
+	logger     *logger.Logger
+	metrics    *metrics.Metrics
+	jobChan    chan *ProcessedMessage
+	workers    int
+	wg         sync.WaitGroup
+	stats      ProcessorStats
 }
 
+// ProcessorStats tracks processing statistics
 type ProcessorStats struct {
-    Processed uint64
-    Matched   uint64
-    Errors    uint64
+	Processed uint64
+	Matched   uint64
+	Errors    uint64
 }
 
-func NewProcessor(cfg ProcessorConfig, log *logger.Logger, metrics *metrics.Metrics) *Processor {
-    if cfg.Workers <= 0 {
-        cfg.Workers = 1
-    }
-    if cfg.QueueSize <= 0 {
-        cfg.QueueSize = 1000
-    }
+// NewProcessor creates a new rule processor
+func NewProcessor(workers int, logger *logger.Logger, metrics *metrics.Metrics) *Processor {
+	if workers <= 0 {
+		workers = 1
+	}
 
-    p := &Processor{
-        index:      NewRuleIndex(log),
-        msgPool:    NewMessagePool(log),
-        resultPool: NewResultPool(log),
-        workers:    cfg.Workers,
-        jobChan:    make(chan *ProcessingMessage, cfg.QueueSize),
-        logger:     log,
-        metrics:    metrics,
-    }
-
-    p.logger.Info("initializing processor",
-        "workers", cfg.Workers,
-        "queueSize", cfg.QueueSize,
-        "batchSize", cfg.BatchSize)
-
-    p.metrics.SetWorkerPoolActive(float64(cfg.Workers))
-    p.startWorkers()
-    return p
+	return &Processor{
+		index:   NewRuleIndex(logger, metrics),
+		logger:  logger,
+		metrics: metrics,
+		workers: workers,
+		jobChan: make(chan *ProcessedMessage, 1000),
+	}
 }
 
-func (p *Processor) LoadRules(rules []Rule) error {
-    p.logger.Info("loading rules into processor", "ruleCount", len(rules))
+// Start begins processing messages
+func (p *Processor) Start() {
+	for i := 0; i < p.workers; i++ {
+		p.wg.Add(1)
+		go p.worker()
+	}
+}
 
-    p.index.Clear()
+// Stop gracefully shuts down the processor
+func (p *Processor) Stop() {
+	close(p.jobChan)
+	p.wg.Wait()
+}
 
-    for i := range rules {
-        rule := &rules[i]
-        p.index.Add(rule)
+// Process processes a message against loaded rules
+func (p *Processor) Process(msg *ProcessedMessage) ([]*MatchResult, error) {
+    // Check for nil message
+    if msg == nil {
+        return nil, fmt.Errorf("message is nil")
     }
 
-    p.metrics.SetRulesActive(float64(len(rules)))
-    p.logger.Info("rules loaded successfully", "count", len(rules))
-    return nil
-}
+    // Check for empty topic
+    if msg.Topic == "" {
+        return nil, fmt.Errorf("message topic is empty")
+    }
 
-func (p *Processor) GetTopics() []string {
-    topics := p.index.GetTopics()
-    p.logger.Debug("retrieved topics from index", "topicCount", len(topics))
-    return topics
-}
+    atomic.AddUint64(&p.stats.Processed, 1)
 
-func (p *Processor) GetJobChannel() chan *ProcessingMessage {
-    return p.jobChan
-}
+    // Validate message values
+    if msg.Values == nil {
+        msg.Values = make(map[string]interface{})
+    }
 
-func (p *Processor) Process(topic string, payload []byte) ([]*Action, error) {
-    p.logger.Debug("processing message",
-        "topic", topic,
-        "payloadSize", len(payload))
+    // If payload is present but Values is empty, try to unmarshal
+    if len(msg.Payload) > 0 && len(msg.Values) == 0 {
+        if err := json.Unmarshal(msg.Payload, &msg.Values); err != nil {
+            atomic.AddUint64(&p.stats.Errors, 1)
+            p.logger.Error("failed to unmarshal payload",
+                "error", err,
+                "topic", msg.Topic)
+            return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+        }
+    }
 
-    msg := p.msgPool.Get()
-    msg.Topic = topic
-    msg.Payload = payload
-
-    msg.Rules = p.index.Find(topic)
-    if len(msg.Rules) == 0 {
-        p.logger.Debug("no matching rules found for topic", "topic", topic)
-        p.msgPool.Put(msg)
+    // Find matching rules
+    rules := p.index.Find(msg.Topic)
+    if len(rules) == 0 {
         return nil, nil
     }
 
-    if err := json.Unmarshal(payload, &msg.Values); err != nil {
-        p.msgPool.Put(msg)
-        atomic.AddUint64(&p.stats.Errors, 1)
-        p.metrics.IncMessagesTotal("error")
-        p.logger.Error("failed to unmarshal message",
-            "error", err,
-            "topic", topic)
-        return nil, fmt.Errorf("failed to unmarshal message: %w", err)
-    }
+    var lastErr error
+    results := make([]*MatchResult, 0, len(rules))
 
-    for _, rule := range msg.Rules {
-        if rule.Conditions == nil || p.evaluateConditions(rule.Conditions, msg.Values) {
-            action, err := p.processActionTemplate(rule.Action, msg.Values)
-            if err != nil {
-                p.metrics.IncTemplateOpsTotal("error")
-                p.logger.Error("failed to process action template",
-                    "error", err,
-                    "topic", rule.Topic)
-                continue
+    // Process each matching rule
+    for _, rule := range rules {
+        // Skip disabled rules
+        if !rule.Enabled {
+            continue
+        }
+
+        // Check source broker if specified
+        if rule.SourceBroker != "" && rule.SourceBroker != msg.SourceBroker {
+            continue
+        }
+
+        // Evaluate conditions
+        if rule.Conditions != nil && !evaluateConditions(rule.Conditions, msg) {
+            continue
+        }
+
+        // Process action template
+        action, err := p.processActionTemplate(rule.Action, msg)
+        if err != nil {
+            atomic.AddUint64(&p.stats.Errors, 1)
+            p.logger.Error("failed to process action template",
+                "error", err,
+                "topic", msg.Topic,
+                "rule", rule.Topic)
+            // Store error but continue processing other rules
+            lastErr = err
+            continue
+        }
+
+        result := &MatchResult{
+            Rule:      rule,
+            Action:    action,
+            Variables: msg.Values,
+            Headers:   make(map[string]string),
+        }
+
+        // Copy any processed headers from the action
+        if action.Headers != nil {
+            for k, v := range action.Headers {
+                result.Headers[k] = v
             }
-            p.metrics.IncTemplateOpsTotal("success")
+        }
+
+        results = append(results, result)
+        atomic.AddUint64(&p.stats.Matched, 1)
+
+        if p.metrics != nil {
             p.metrics.IncRuleMatches()
-            msg.Actions = append(msg.Actions, action)
         }
     }
 
-    actions := make([]*Action, len(msg.Actions))
-    copy(actions, msg.Actions)
-
-    atomic.AddUint64(&p.stats.Processed, 1)
-    if len(actions) > 0 {
-        atomic.AddUint64(&p.stats.Matched, 1)
-        p.logger.Debug("message processing complete",
-            "topic", topic,
-            "matchedActions", len(actions))
+    // If we have processed rules but encountered errors, return the error
+    if len(results) == 0 && lastErr != nil {
+        return nil, lastErr
     }
 
-    p.msgPool.Put(msg)
-    return actions, nil
+    return results, nil
 }
 
-func (p *Processor) processActionTemplate(action *Action, msg map[string]interface{}) (*Action, error) {
-    processedAction := &Action{
-        Topic:   action.Topic,
-        Payload: action.Payload,
-    }
+// processActionTemplate processes template variables in the action
+func (p *Processor) processActionTemplate(action *Action, msg *ProcessedMessage) (*Action, error) {
+	result := &Action{
+		TargetBroker: action.TargetBroker,
+		QoS:          action.QoS,
+		Retain:       action.Retain,
+	}
 
-    if strings.Contains(action.Topic, "${") {
-        topic, err := p.processTemplate(action.Topic, msg)
-        if err != nil {
-            return nil, fmt.Errorf("failed to process topic template: %w", err)
-        }
-        processedAction.Topic = topic
-    }
+	p.logger.Debug("processing action template",
+		"sourceTopic", msg.Topic,
+		"targetTopic", action.Topic,
+		"variables", getMapKeys(msg.Values))
 
-    payload, err := p.processTemplate(action.Payload, msg)
-    if err != nil {
-        return nil, fmt.Errorf("failed to process payload template: %w", err)
-    }
-    processedAction.Payload = payload
+	// Process topic template - topic variables are required
+	topic, err := p.processTemplate(action.Topic, msg.Values, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process topic template: %w", err)
+	}
+	result.Topic = topic
 
-    return processedAction, nil
+	// Process payload template - variables are optional
+	if action.Payload != "" {
+		payload, err := p.processTemplate(action.Payload, msg.Values, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process payload template: %w", err)
+		}
+		result.Payload = payload
+	}
+
+	// Process header templates - variables are optional like payload
+	if action.Headers != nil {
+		result.Headers = make(map[string]string)
+		for k, v := range action.Headers {
+			processed, err := p.processTemplate(v, msg.Values, false)
+			if err != nil {
+				return nil, fmt.Errorf("failed to process header template '%s': %w", k, err)
+			}
+			result.Headers[k] = processed
+		}
+
+		p.logger.Debug("processed headers",
+			"originalHeaders", action.Headers,
+			"processedHeaders", result.Headers)
+	}
+
+	p.logger.Debug("action template processing complete",
+		"topic", result.Topic,
+		"headersCount", len(result.Headers))
+
+	return result, nil
 }
 
-func (p *Processor) processTemplate(template string, data map[string]interface{}) (string, error) {
-    p.logger.Debug("processing template",
-        "template", template,
-        "dataKeys", getMapKeys(data))
-
-    // Handle function calls first (uuid4, uuid7)
-    functionPattern := regexp.MustCompile(`\${(uuid[47]\(\))}`)
-    result := functionPattern.ReplaceAllStringFunc(template, func(match string) string {
-        // Extract function name from ${function()}
-        function := match[2 : len(match)-1] // remove ${ and }
-
-        switch function {
-        case "uuid4()":
-            id := uuid.New()
-            p.logger.Debug("generated UUIDv4", "uuid", id.String())
-            return id.String()
-        case "uuid7()":
-            id, err := uuid.NewV7()
-            if err != nil {
-                p.logger.Error("failed to generate UUIDv7", "error", err)
-                return ""
-            }
-            p.logger.Debug("generated UUIDv7", "uuid", id.String())
-            return id.String()
-        default:
-            p.logger.Debug("unknown function in template",
-                "function", function)
-            return match
-        }
-    })
-
-    // Handle variable substitutions
-    varPattern := regexp.MustCompile(`\${([^}]+)}`)
-    result = varPattern.ReplaceAllStringFunc(result, func(match string) string {
-        path := strings.Split(match[2:len(match)-1], ".") // remove ${ and }
-
-        value, err := p.getValueFromPath(data, path)
-        if err != nil {
-            p.logger.Debug("template value not found",
-                "path", strings.Join(path, "."),
-                "error", err)
-            return match
-        }
-
-        strValue := p.convertToString(value)
-        p.logger.Debug("template variable processed",
-            "path", strings.Join(path, "."),
-            "value", strValue)
-        return strValue
-    })
-
-    return result, nil
-}
-
-func (p *Processor) getValueFromPath(data map[string]interface{}, path []string) (interface{}, error) {
-    var current interface{} = data
-
-    for _, key := range path {
-        switch v := current.(type) {
-        case map[string]interface{}:
-            var ok bool
-            current, ok = v[key]
-            if !ok {
-                return nil, fmt.Errorf("key not found: %s", key)
-            }
-        case map[interface{}]interface{}:
-            var ok bool
-            current, ok = v[key]
-            if !ok {
-                return nil, fmt.Errorf("key not found: %s", key)
-            }
-        default:
-            return nil, fmt.Errorf("invalid path: %s is not a map", key)
-        }
-    }
-
-    return current, nil
-}
-
-func (p *Processor) convertToString(value interface{}) string {
-    switch v := value.(type) {
-    case string:
-        return v
-    case float64:
-        return strconv.FormatFloat(v, 'f', -1, 64)
-    case int:
-        return strconv.Itoa(v)
-    case bool:
-        return strconv.FormatBool(v)
-    case nil:
-        return "null"
-    case map[string]interface{}, []interface{}:
-        jsonBytes, err := json.Marshal(v)
-        if err != nil {
-            p.logger.Debug("failed to marshal complex value to JSON",
-                "error", err)
-            return fmt.Sprintf("%v", v)
-        }
-        return string(jsonBytes)
-    default:
-        return fmt.Sprintf("%v", v)
-    }
-}
-
-func (p *Processor) startWorkers() {
-    p.logger.Info("starting worker pool",
-        "workerCount", p.workers)
-
-    for i := 0; i < p.workers; i++ {
-        p.wg.Add(1)
-        go p.worker()
-    }
-}
-
+// worker processes messages from the job channel
 func (p *Processor) worker() {
-    defer p.wg.Done()
+	defer p.wg.Done()
 
-    for msg := range p.jobChan {
-        p.processMessage(msg)
-    }
+	for msg := range p.jobChan {
+		if _, err := p.Process(msg); err != nil {
+			p.logger.Error("failed to process message",
+				"error", err,
+				"topic", msg.Topic)
+		}
+	}
 }
 
-func (p *Processor) processMessage(msg *ProcessingMessage) {
-    defer p.msgPool.Put(msg)
-
-    if err := json.Unmarshal(msg.Payload, &msg.Values); err != nil {
-        atomic.AddUint64(&p.stats.Errors, 1)
-        p.metrics.IncMessagesTotal("error")
-        p.logger.Error("failed to unmarshal message",
-            "error", err,
-            "topic", msg.Topic)
-        return
-    }
-
-    atomic.AddUint64(&p.stats.Processed, 1)
-    if len(msg.Actions) > 0 {
-        atomic.AddUint64(&p.stats.Matched, 1)
-    }
-}
-
+// GetStats returns current processor statistics
 func (p *Processor) GetStats() ProcessorStats {
-    stats := ProcessorStats{
-        Processed: atomic.LoadUint64(&p.stats.Processed),
-        Matched:   atomic.LoadUint64(&p.stats.Matched),
-        Errors:    atomic.LoadUint64(&p.stats.Errors),
-    }
-
-    p.logger.Debug("processor stats retrieved",
-        "processed", stats.Processed,
-        "matched", stats.Matched,
-        "errors", stats.Errors)
-
-    return stats
+	return ProcessorStats{
+		Processed: atomic.LoadUint64(&p.stats.Processed),
+		Matched:   atomic.LoadUint64(&p.stats.Matched),
+		Errors:    atomic.LoadUint64(&p.stats.Errors),
+	}
 }
 
-func (p *Processor) Close() {
-    p.logger.Info("shutting down processor")
-    close(p.jobChan)
-    p.wg.Wait()
+// processTemplate processes a template string with message values
+func (p *Processor) processTemplate(template string, values map[string]interface{}, isTopicTemplate bool) (string, error) {
+	if template == "" {
+		return "", nil
+	}
+
+	p.logger.Debug("processing template",
+		"template", template,
+		"isTopicTemplate", isTopicTemplate,
+		"availableVariables", getMapKeys(values))
+
+	// Find all ${...} references
+	re := regexp.MustCompile(`\${([^}]+)}`)
+	matches := re.FindAllStringSubmatch(template, -1)
+
+	result := template
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+
+		placeholder := match[0]    // ${varname}
+		varName := match[1]        // varname
+
+		// Check if variable exists
+		value, exists := values[varName]
+		if !exists {
+			// Topic templates require all variables
+			if isTopicTemplate {
+				p.logger.Error("required template variable not found",
+					"variable", varName,
+					"template", template)
+				return "", fmt.Errorf("required template variable '%s' not found", varName)
+			}
+			// Use empty string for missing optional variables
+			p.logger.Debug("optional template variable not found, using empty string",
+				"variable", varName)
+			value = ""
+		}
+
+		// Convert value to string
+		strValue := p.convertValueToString(value)
+
+		// Replace variable in template
+		result = strings.Replace(result, placeholder, strValue, -1)
+
+		p.logger.Debug("processed template variable",
+			"variable", varName,
+			"value", strValue)
+	}
+
+	return result, nil
+}
+
+// convertValueToString converts a value to its string representation
+func (p *Processor) convertValueToString(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	case nil:
+		return ""
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case float64:
+		// Use exact representation for integers
+		if float64(int64(v)) == v {
+			return fmt.Sprintf("%d", int64(v))
+		}
+		return fmt.Sprintf("%g", v)
+	default:
+		// For other types, use JSON marshaling
+		if bytes, err := json.Marshal(v); err == nil {
+			str := string(bytes)
+			// Remove quotes from simple string values
+			if len(str) > 0 && str[0] == '"' && str[len(str)-1] == '"' {
+				str = str[1 : len(str)-1]
+			}
+			return str
+		}
+		// Fallback to simple string conversion
+		return fmt.Sprintf("%v", v)
+	}
 }
