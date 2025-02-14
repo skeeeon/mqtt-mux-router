@@ -1,206 +1,121 @@
 //file: internal/rule/index.go
+
 package rule
 
 import (
-	"fmt"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
+    "sync"
+    "sync/atomic"
+    "time"
 
-	"mqtt-mux-router/internal/logger"
-	"mqtt-mux-router/internal/metrics"
+    "mqtt-mux-router/internal/logger"
 )
 
-// RuleIndex provides fast rule lookup with wildcard support
 type RuleIndex struct {
-	exactMatches map[string][]*Rule            // For exact topic matches
-	wildcardTree *TopicTree                    // For wildcard topic patterns
-	stats        IndexStats                    // Index statistics
-	logger       *logger.Logger                // Logger instance
-	metrics      *metrics.Metrics              // Metrics collector
-	mu           sync.RWMutex                  // Protects index updates
+    exactMatches map[string][]*Rule
+    mu           sync.RWMutex
+    stats        IndexStats
+    logger       *logger.Logger
 }
 
-// IndexStats tracks rule index statistics
 type IndexStats struct {
-	RuleCount     uint64    // Total number of rules
-	Lookups       uint64    // Number of topic lookups
-	Matches       uint64    // Number of successful matches
-	LastUpdate    time.Time // Last index update time
-	LastError     error     // Last error encountered
-	WildcardRules uint64    // Number of wildcard rules
+    lookups     uint64
+    matches     uint64
+    lastUpdated time.Time
+    mu          sync.RWMutex
 }
 
-// NewRuleIndex creates a new rule index
-func NewRuleIndex(logger *logger.Logger, metrics *metrics.Metrics) *RuleIndex {
-	return &RuleIndex{
-		exactMatches: make(map[string][]*Rule),
-		wildcardTree: &TopicTree{
-			root: &TopicNode{
-				children: make(map[string]*TopicNode),
-			},
-		},
-		logger:  logger,
-		metrics: metrics,
-		stats: IndexStats{
-			LastUpdate: time.Now(),
-		},
-	}
+func NewRuleIndex(log *logger.Logger) *RuleIndex {
+    return &RuleIndex{
+        exactMatches: make(map[string][]*Rule),
+        stats: IndexStats{
+            lastUpdated: time.Now(),
+        },
+        logger: log,
+    }
 }
 
-// Add adds a rule to the index
-func (idx *RuleIndex) Add(rule *Rule) error {
-	if rule == nil {
-		return fmt.Errorf("rule cannot be nil")
-	}
+func (idx *RuleIndex) Add(rule *Rule) {
+    if rule == nil {
+        idx.logger.Error("attempted to add nil rule to index")
+        return
+    }
 
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
+    idx.mu.Lock()
+    defer idx.mu.Unlock()
 
-	// Check if topic contains wildcards
-	if containsWildcard(rule.Topic) {
-		if err := idx.wildcardTree.AddRule(rule); err != nil {
-			idx.logger.Error("failed to add wildcard rule",
-				"topic", rule.Topic,
-				"error", err)
-			idx.stats.LastError = err
-			return err
-		}
-		atomic.AddUint64(&idx.stats.WildcardRules, 1)
-	} else {
-		// Add rule to exact matches
-		idx.exactMatches[rule.Topic] = append(idx.exactMatches[rule.Topic], rule)
-	}
+    idx.logger.Debug("adding rule to index",
+        "topic", rule.Topic,
+        "existingRules", len(idx.exactMatches[rule.Topic]))
 
-	atomic.AddUint64(&idx.stats.RuleCount, 1)
-	idx.stats.LastUpdate = time.Now()
+    idx.exactMatches[rule.Topic] = append(idx.exactMatches[rule.Topic], rule)
+    idx.stats.lastUpdated = time.Now()
 
-	if idx.metrics != nil {
-		idx.metrics.SetRulesActive(float64(atomic.LoadUint64(&idx.stats.RuleCount)))
-	}
-
-	idx.logger.Debug("rule added to index",
-		"topic", rule.Topic,
-		"isWildcard", containsWildcard(rule.Topic))
-
-	return nil
+    idx.logger.Info("rule added to index",
+        "topic", rule.Topic,
+        "totalRulesForTopic", len(idx.exactMatches[rule.Topic]),
+        "totalTopics", len(idx.exactMatches))
 }
 
-// Remove removes a rule from the index
-func (idx *RuleIndex) Remove(rule *Rule) error {
-	if rule == nil {
-		return fmt.Errorf("rule cannot be nil")
-	}
-
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-
-	if containsWildcard(rule.Topic) {
-		if err := idx.wildcardTree.RemoveRule(rule); err != nil {
-			idx.logger.Error("failed to remove wildcard rule",
-				"topic", rule.Topic,
-				"error", err)
-			idx.stats.LastError = err
-			return err
-		}
-		atomic.AddUint64(&idx.stats.WildcardRules, ^uint64(0))
-	} else {
-		rules := idx.exactMatches[rule.Topic]
-		for i, r := range rules {
-			if r == rule {
-				idx.exactMatches[rule.Topic] = append(rules[:i], rules[i+1:]...)
-				break
-			}
-		}
-		if len(idx.exactMatches[rule.Topic]) == 0 {
-			delete(idx.exactMatches, rule.Topic)
-		}
-	}
-
-	atomic.AddUint64(&idx.stats.RuleCount, ^uint64(0))
-	idx.stats.LastUpdate = time.Now()
-
-	if idx.metrics != nil {
-		idx.metrics.SetRulesActive(float64(atomic.LoadUint64(&idx.stats.RuleCount)))
-	}
-
-	idx.logger.Debug("rule removed from index",
-		"topic", rule.Topic,
-		"isWildcard", containsWildcard(rule.Topic))
-
-	return nil
-}
-
-// Find finds all rules matching a topic
 func (idx *RuleIndex) Find(topic string) []*Rule {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
+    idx.mu.RLock()
+    defer idx.mu.RUnlock()
 
-	atomic.AddUint64(&idx.stats.Lookups, 1)
+    atomic.AddUint64(&idx.stats.lookups, 1)
+    rules := idx.exactMatches[topic]
 
-	var matches []*Rule
+    idx.logger.Debug("looking up rules for topic",
+        "topic", topic,
+        "rulesFound", len(rules))
 
-	// Check exact matches first
-	if exactMatches, ok := idx.exactMatches[topic]; ok {
-		matches = append(matches, exactMatches...)
-	}
-
-	// Check wildcard matches
-	if wildcardMatches := idx.wildcardTree.FindMatches(topic); len(wildcardMatches) > 0 {
-		matches = append(matches, wildcardMatches...)
-	}
-
-	if len(matches) > 0 {
-		atomic.AddUint64(&idx.stats.Matches, 1)
-		if idx.metrics != nil {
-			idx.metrics.IncRuleMatches()
-		}
-	}
-
-	idx.logger.Debug("rule lookup completed",
-		"topic", topic,
-		"matchCount", len(matches))
-
-	return matches
+    if len(rules) > 0 {
+        atomic.AddUint64(&idx.stats.matches, 1)
+    }
+    
+    return rules
 }
 
-// Clear removes all rules from the index
+func (idx *RuleIndex) GetTopics() []string {
+    idx.mu.RLock()
+    defer idx.mu.RUnlock()
+    
+    topics := make([]string, 0, len(idx.exactMatches))
+    for topic := range idx.exactMatches {
+        topics = append(topics, topic)
+    }
+
+    idx.logger.Debug("retrieved topic list",
+        "topicCount", len(topics))
+
+    return topics
+}
+
 func (idx *RuleIndex) Clear() {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
+    idx.mu.Lock()
+    defer idx.mu.Unlock()
 
-	idx.exactMatches = make(map[string][]*Rule)
-	idx.wildcardTree = &TopicTree{
-		root: &TopicNode{
-			children: make(map[string]*TopicNode),
-		},
-	}
+    previousCount := len(idx.exactMatches)
+    idx.exactMatches = make(map[string][]*Rule)
+    idx.stats.lastUpdated = time.Now()
 
-	atomic.StoreUint64(&idx.stats.RuleCount, 0)
-	atomic.StoreUint64(&idx.stats.WildcardRules, 0)
-	idx.stats.LastUpdate = time.Now()
-
-	if idx.metrics != nil {
-		idx.metrics.SetRulesActive(0)
-	}
-
-	idx.logger.Info("rule index cleared")
+    idx.logger.Info("index cleared",
+        "previousRuleCount", previousCount,
+        "timestamp", idx.stats.lastUpdated)
 }
 
-// GetStats returns current index statistics
 func (idx *RuleIndex) GetStats() IndexStats {
-	return IndexStats{
-		RuleCount:     atomic.LoadUint64(&idx.stats.RuleCount),
-		Lookups:       atomic.LoadUint64(&idx.stats.Lookups),
-		Matches:       atomic.LoadUint64(&idx.stats.Matches),
-		WildcardRules: atomic.LoadUint64(&idx.stats.WildcardRules),
-		LastUpdate:    idx.stats.LastUpdate,
-		LastError:     idx.stats.LastError,
-	}
-}
+    idx.stats.mu.RLock()
+    defer idx.stats.mu.RUnlock()
 
-// containsWildcard checks if a topic contains MQTT wildcards
-func containsWildcard(topic string) bool {
-	return strings.Contains(topic, "+") || strings.Contains(topic, "#")
+    stats := IndexStats{
+        lookups:     atomic.LoadUint64(&idx.stats.lookups),
+        matches:     atomic.LoadUint64(&idx.stats.matches),
+        lastUpdated: idx.stats.lastUpdated,
+    }
+
+    idx.logger.Debug("index stats retrieved",
+        "lookups", stats.lookups,
+        "matches", stats.matches,
+        "lastUpdated", stats.lastUpdated)
+
+    return stats
 }

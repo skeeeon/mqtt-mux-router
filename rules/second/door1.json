@@ -1,0 +1,24 @@
+[
+	{
+        "topic": "door1/control",
+        "conditions": {
+            "operator": "or",
+            "items": [
+                {
+                    "field": "action",
+                    "operator": "eq",
+                    "value": "grant"
+                },
+                {
+                    "field": "state",
+                    "operator": "eq",
+                    "value": 1
+                }
+            ]
+        },
+        "action": {
+            "topic": "alerts/device",
+            "payload": "{\"alert\":\"Device needs attention\",\"deviceId\":${deviceId}}"
+        }
+    }
+]

@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	// Command line flags
+	// Command line flags for config and rules
 	configPath := flag.String("config", "config/config.json", "path to config file")
 	rulesPath := flag.String("rules", "rules", "path to rules directory")
 
@@ -58,25 +58,31 @@ func main() {
 	}
 	defer logger.Sync()
 
-	// Setup metrics
-	reg := prometheus.NewRegistry()
-	metricsService, err := metrics.NewMetrics(reg)
-	if err != nil {
-		logger.Fatal("failed to create metrics service", "error", err)
-	}
-
-	// Create metrics server if enabled
+	// Setup metrics if enabled
+	var metricsService *metrics.Metrics
+	var metricsCollector *metrics.MetricsCollector
 	var metricsServer *http.Server
+
 	if cfg.Metrics.Enabled {
+		// Initialize metrics
+		reg := prometheus.NewRegistry()
+		metricsService, err = metrics.NewMetrics(reg)
+		if err != nil {
+			logger.Fatal("failed to create metrics service", "error", err)
+		}
+
+		// Parse metrics update interval
 		updateInterval, err := time.ParseDuration(cfg.Metrics.UpdateInterval)
 		if err != nil {
 			logger.Fatal("invalid metrics update interval", "error", err)
 		}
 
-		collector := metrics.NewMetricsCollector(metricsService, updateInterval)
-		collector.Start()
-		defer collector.Stop()
+		// Create metrics collector
+		metricsCollector = metrics.NewMetricsCollector(metricsService, updateInterval)
+		metricsCollector.Start()
+		defer metricsCollector.Stop()
 
+		// Setup metrics HTTP server
 		mux := http.NewServeMux()
 		mux.Handle(cfg.Metrics.Path, promhttp.HandlerFor(reg, promhttp.HandlerOpts{
 			Registry:          reg,
@@ -88,6 +94,7 @@ func main() {
 			Handler: mux,
 		}
 
+		// Start metrics server
 		go func() {
 			logger.Info("starting metrics server",
 				"address", cfg.Metrics.Address,
@@ -102,59 +109,39 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	// Create broker manager
-	brokerManager := broker.NewManager(logger, metricsService)
-
-	// Initialize brokers from configuration
-	for id, brokerCfg := range cfg.Brokers {
-		if err := brokerManager.AddBroker(&brokerCfg); err != nil {
-			logger.Fatal("failed to add broker",
-				"id", id,
-				"error", err)
-		}
+	// Create broker with processing configuration
+	brokerCfg := broker.BrokerConfig{
+		ProcessorWorkers: cfg.Processing.Workers,
+		QueueSize:       cfg.Processing.QueueSize,
+		BatchSize:       cfg.Processing.BatchSize,
 	}
 
-	// Validate we have at least one source and one target broker
-	sourceBrokers := brokerManager.GetBrokersByRole(broker.BrokerRoleSource)
-	targetBrokers := brokerManager.GetBrokersByRole(broker.BrokerRoleTarget)
-
-	if len(sourceBrokers) == 0 {
-		logger.Fatal("no source brokers configured")
-	}
-	if len(targetBrokers) == 0 {
-		logger.Fatal("no target brokers configured")
+	mqttBroker, err := broker.NewBroker(cfg, logger, brokerCfg, metricsService)
+	if err != nil {
+		logger.Fatal("failed to create broker", "error", err)
 	}
 
-	// Load and validate rules
+	// Create context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Load rules from directory
 	rulesLoader := rule.NewRulesLoader(logger)
 	rules, err := rulesLoader.LoadFromDirectory(*rulesPath)
 	if err != nil {
 		logger.Fatal("failed to load rules", "error", err)
 	}
 
-	// Create and initialize rule processor
-	processor := rule.NewProcessor(cfg.Processing.Workers, logger, metricsService)
-
-	// Create context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start broker manager
-	if err := brokerManager.Start(ctx); err != nil {
-		logger.Fatal("failed to start broker manager", "error", err)
+	// Start processing
+	if err := mqttBroker.Start(ctx, rules); err != nil {
+		logger.Fatal("failed to start broker", "error", err)
 	}
-
-	// Start rule processor
-	processor.Start()
 
 	logger.Info("mqtt-mux-router started",
 		"workers", cfg.Processing.Workers,
 		"queueSize", cfg.Processing.QueueSize,
 		"batchSize", cfg.Processing.BatchSize,
 		"rulesCount", len(rules),
-		"sourceBrokers", len(sourceBrokers),
-		"targetBrokers", len(targetBrokers),
-		"totalBrokers", len(cfg.Brokers),
 		"metricsEnabled", cfg.Metrics.Enabled)
 
 	// Handle signals
@@ -162,31 +149,14 @@ func main() {
 		sig := <-sigChan
 		switch sig {
 		case syscall.SIGHUP:
-			logger.Info("received SIGHUP, reloading configuration")
-			
-			// Reload configuration
-			if _, err := config.Load(*configPath); err != nil {
-				logger.Error("failed to reload config", "error", err)
-				continue
-			}
-
-			// TODO: Implement hot reload of brokers and rules
-			logger.Info("configuration reloaded")
-
+			logger.Info("received SIGHUP, reopening logs")
+			logger.Sync()
 		case syscall.SIGINT, syscall.SIGTERM:
 			logger.Info("shutting down...")
 
 			// Graceful shutdown
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer shutdownCancel()
-
-			// Stop rule processor
-			processor.Stop()
-
-			// Stop broker manager
-			if err := brokerManager.Stop(shutdownCtx); err != nil {
-				logger.Error("failed to stop broker manager", "error", err)
-			}
 
 			// Shutdown metrics server if enabled
 			if cfg.Metrics.Enabled && metricsServer != nil {
@@ -195,7 +165,9 @@ func main() {
 				}
 			}
 
-			logger.Info("shutdown complete")
+			// Shutdown other components
+			cancel()
+			mqttBroker.Close()
 			return
 		}
 	}

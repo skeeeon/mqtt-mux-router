@@ -1,141 +1,145 @@
 //file: internal/rule/loader.go
+
 package rule
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"time"
+    "encoding/json"
+    "fmt"
+    "os"
+    "path/filepath"
 
-	"mqtt-mux-router/internal/logger"
+    "mqtt-mux-router/internal/logger"
 )
 
-// RulesLoader handles loading rules from files
 type RulesLoader struct {
-	logger *logger.Logger
+    logger *logger.Logger
 }
 
-// NewRulesLoader creates a new rules loader
 func NewRulesLoader(log *logger.Logger) *RulesLoader {
-	return &RulesLoader{
-		logger: log,
-	}
+    return &RulesLoader{
+        logger: log,
+    }
 }
 
-// LoadFromDirectory loads and validates all rule files from a directory
 func (l *RulesLoader) LoadFromDirectory(path string) ([]Rule, error) {
-	var rules []Rule
+    var rules []Rule
 
-	// Verify directory exists
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, fmt.Errorf("directory does not exist: %s", path)
-	}
+    err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return err
+        }
 
-	err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+        if info.IsDir() || filepath.Ext(path) != ".json" {
+            return nil
+        }
 
-		if info.IsDir() || filepath.Ext(path) != ".json" {
-			return nil
-		}
+        l.logger.Debug("loading rule file", "path", path)
 
-		l.logger.Debug("loading rule file", "path", path)
+        data, err := os.ReadFile(path)
+        if err != nil {
+            l.logger.Error("failed to read rule file",
+                "path", path,
+                "error", err)
+            return err
+        }
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			l.logger.Error("failed to read rule file",
-				"path", path,
-				"error", err)
-			return err
-		}
+        var ruleSet []Rule
+        if err := json.Unmarshal(data, &ruleSet); err != nil {
+            l.logger.Error("failed to parse rule file",
+                "path", path,
+                "error", err)
+            return fmt.Errorf("failed to parse rule file %s: %w", path, err)
+        }
 
-		// Try to parse as a rule set first
-		var ruleSet RuleSet
-		if err := json.Unmarshal(data, &ruleSet); err == nil && ruleSet.Name != "" {
-			// Valid rule set
-			if err := l.validateRuleSet(&ruleSet); err != nil {
-				return fmt.Errorf("invalid rule set in %s: %w", path, err)
-			}
-			rules = append(rules, ruleSet.Rules...)
-		} else {
-			// Try single rule format
-			var singleRule Rule
-			if err := json.Unmarshal(data, &singleRule); err != nil {
-				l.logger.Error("failed to parse rule file",
-					"path", path,
-					"error", err)
-				return fmt.Errorf("failed to parse rule file %s: %w", path, err)
-			}
-			// Validate single rule
-			if err := validateRule(&singleRule); err != nil {
-				return fmt.Errorf("invalid rule in %s: %w", path, err)
-			}
-			rules = append(rules, singleRule)
-		}
+        l.logger.Debug("successfully loaded rules",
+            "path", path,
+            "count", len(ruleSet))
 
-		return nil
-	})
+        // Validate rules before adding them
+        for i, rule := range ruleSet {
+            if err := validateRule(&rule); err != nil {
+                l.logger.Error("invalid rule configuration",
+                    "path", path,
+                    "ruleIndex", i,
+                    "error", err)
+                return fmt.Errorf("invalid rule in file %s at index %d: %w", path, i, err)
+            }
+        }
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to load rules: %w", err)
-	}
+        rules = append(rules, ruleSet...)
+        return nil
+    })
 
-	// Set creation timestamp for rules that don't have one
-	now := time.Now()
-	for i := range rules {
-		if rules[i].CreatedAt.IsZero() {
-			rules[i].CreatedAt = now
-		}
-	}
+    if err != nil {
+        return nil, fmt.Errorf("failed to load rules: %w", err)
+    }
 
-	// Check for duplicate topics across all rules
-	topics := make(map[string]struct{})
-	for _, rule := range rules {
-		if _, exists := topics[rule.Topic]; exists {
-			return nil, fmt.Errorf("duplicate topic pattern found: %s", rule.Topic)
-		}
-		topics[rule.Topic] = struct{}{}
-	}
+    l.logger.Info("rules loaded successfully",
+        "totalRules", len(rules))
 
-	l.logger.Info("rules loaded successfully",
-		"count", len(rules))
-
-	return rules, nil
+    return rules, nil
 }
 
-// validateRuleSet validates a complete rule set
-func (l *RulesLoader) validateRuleSet(ruleSet *RuleSet) error {
-	if ruleSet.Name == "" {
-		return fmt.Errorf("rule set name is required")
-	}
+// validateRule performs basic validation of rule configuration
+func validateRule(rule *Rule) error {
+    if rule.Topic == "" {
+        return fmt.Errorf("rule topic cannot be empty")
+    }
 
-	if ruleSet.Version == "" {
-		return fmt.Errorf("rule set version is required")
-	}
+    if rule.Action == nil {
+        return fmt.Errorf("rule action cannot be nil")
+    }
 
-	if len(ruleSet.Rules) == 0 {
-		return fmt.Errorf("rule set must contain at least one rule")
-	}
+    if rule.Action.Topic == "" {
+        return fmt.Errorf("action topic cannot be empty")
+    }
 
-	if ruleSet.CreatedAt.IsZero() {
-		ruleSet.CreatedAt = time.Now()
-	}
+    if rule.Conditions != nil {
+        if err := validateConditions(rule.Conditions); err != nil {
+            return fmt.Errorf("invalid conditions: %w", err)
+        }
+    }
 
-	// Check for duplicate topics within the rule set
-	topics := make(map[string]struct{})
-	for _, rule := range ruleSet.Rules {
-		if _, exists := topics[rule.Topic]; exists {
-			return fmt.Errorf("duplicate topic pattern found: %s", rule.Topic)
-		}
-		topics[rule.Topic] = struct{}{}
+    return nil
+}
 
-		// Validate each rule in the set
-		if err := validateRule(&rule); err != nil {
-			return fmt.Errorf("invalid rule with topic %s: %w", rule.Topic, err)
-		}
-	}
+// validateConditions recursively validates condition groups
+func validateConditions(conditions *Conditions) error {
+    if conditions.Operator != "and" && conditions.Operator != "or" {
+        return fmt.Errorf("invalid operator: %s", conditions.Operator)
+    }
 
-	return nil
+    // Validate individual conditions
+    for _, condition := range conditions.Items {
+        if condition.Field == "" {
+            return fmt.Errorf("condition field cannot be empty")
+        }
+        if !isValidOperator(condition.Operator) {
+            return fmt.Errorf("invalid condition operator: %s", condition.Operator)
+        }
+    }
+
+    // Recursively validate nested condition groups
+    for _, group := range conditions.Groups {
+        if err := validateConditions(&group); err != nil {
+            return err
+        }
+    }
+
+    return nil
+}
+
+// isValidOperator checks if the operator is supported
+func isValidOperator(op string) bool {
+    validOperators := map[string]bool{
+        "eq":       true,
+        "neq":      true,
+        "gt":       true,
+        "lt":       true,
+        "gte":      true,
+        "lte":      true,
+        "exists":   true,
+        "contains": true,
+    }
+    return validOperators[op]
 }
