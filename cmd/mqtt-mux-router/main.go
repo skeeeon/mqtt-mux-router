@@ -14,7 +14,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"mqtt-mux-router/config"
-	"mqtt-mux-router/internal/broker"
+	"mqtt-mux-router/internal/broker"   // Used for the Broker interface
+	"mqtt-mux-router/internal/broker/mqtt"
 	"mqtt-mux-router/internal/logger"
 	"mqtt-mux-router/internal/metrics"
 	"mqtt-mux-router/internal/rule"
@@ -110,13 +111,15 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Create broker with processing configuration
-	brokerCfg := broker.BrokerConfig{
+	brokerCfg := mqtt.BrokerConfig{
 		ProcessorWorkers: cfg.Processing.Workers,
 		QueueSize:       cfg.Processing.QueueSize,
 		BatchSize:       cfg.Processing.BatchSize,
 	}
 
-	mqttBroker, err := broker.NewBroker(cfg, logger, brokerCfg, metricsService)
+	// Create the MQTT broker, but declare it as the broker interface type
+	var messageBroker broker.Broker
+	messageBroker, err = mqtt.NewBroker(cfg, logger, brokerCfg, metricsService)
 	if err != nil {
 		logger.Fatal("failed to create broker", "error", err)
 	}
@@ -133,7 +136,7 @@ func main() {
 	}
 
 	// Start processing
-	if err := mqttBroker.Start(ctx, rules); err != nil {
+	if err := messageBroker.Start(ctx, rules); err != nil {
 		logger.Fatal("failed to start broker", "error", err)
 	}
 
@@ -167,7 +170,7 @@ func main() {
 
 			// Shutdown other components
 			cancel()
-			mqttBroker.Close()
+			messageBroker.Close()
 			return
 		}
 	}
