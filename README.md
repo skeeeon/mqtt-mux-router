@@ -44,27 +44,33 @@ go build -o mqtt-mux-router ./cmd/mqtt-mux-router
 mqtt-mux-router/
 ├── cmd/
 │   └── mqtt-mux-router/
-│       └── main.go                # Application entry point
+│       └── main.go                   # Application entry point
 ├── config/
-│   ├── config.go                  # Configuration structures
-│   └── config.example.json        # Example configuration
+│   ├── config.go                     # Configuration structures
+│   └── config.example.json           # Example configuration
 ├── internal/
 │   ├── broker/
-│   │   └── broker.go             # MQTT broker implementation
+|   │   │   ├── broker.go
+|   │   │   └── mqtt/
+|   │   │       ├── broker.go         
+|   │   │       ├── connection.go    
+|   │   │       ├── interfaces.go
+|   │   │       ├── publisher.go
+|   │   │       └── subscription.go
 │   ├── rule/
-│   │   ├── types.go              # Rule data structures
-│   │   ├── processor.go          # Rule processing and worker pool
-│   │   ├── index.go              # Rule indexing and lookup
-│   │   ├── pool.go               # Object pooling
-│   │   └── loader.go             # Rule file loading
+│   │   ├── types.go                  # Rule data structures
+│   │   ├── processor.go              # Rule processing and worker pool
+│   │   ├── index.go                  # Rule indexing and lookup
+│   │   ├── pool.go                   # Object pooling
+│   │   └── loader.go                 # Rule file loading
 │   ├── logger/
-│   │   └── logger.go             # Logging implementation
+│   │   └── logger.go                 # Logging implementation
 │   ├── metrics/
-│   │   ├── metrics.go            # Prometheus metrics definitions
-│   │   └── collector.go          # Metrics collection
+│   │   ├── metrics.go                # Prometheus metrics definitions
+│   │   └── collector.go              # Metrics collection
 │   └── stats/
-│       └── stats.go              # Performance metrics
-├── rules/                        # Directory for rule files
+│       └── stats.go                  # Performance metrics
+├── rules/                            # Directory for rule files
 │   └── example.json
 ├── go.mod
 └── README.md
