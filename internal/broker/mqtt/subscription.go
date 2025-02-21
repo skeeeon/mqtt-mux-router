@@ -42,16 +42,25 @@ func (s *SubscriptionManagerImpl) Subscribe(topics []string) error {
     s.broker.logger.Info("subscribing to topics", "count", len(topics))
 
     for _, topic := range topics {
-        if token := s.conn.GetClient().Subscribe(topic, 0, s.HandleMessage); token.Wait() && token.Error() != nil {
+        if err := s.subscribeTopic(topic); err != nil {
             s.broker.logger.Error("failed to subscribe to topic",
                 "topic", topic,
-                "error", token.Error())
-            return fmt.Errorf("failed to subscribe to topic %s: %w", topic, token.Error())
+                "error", err)
+            return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
         }
         s.broker.logger.Debug("subscribed to topic", "topic", topic)
     }
 
     s.subscribed = true
+    return nil
+}
+
+// subscribeTopic handles subscription to a single topic with message handler
+func (s *SubscriptionManagerImpl) subscribeTopic(topic string) error {
+    token := s.conn.GetClient().Subscribe(topic, 0, s.HandleMessage)
+    if token.Wait() && token.Error() != nil {
+        return token.Error()
+    }
     return nil
 }
 
@@ -144,14 +153,48 @@ func (s *SubscriptionManagerImpl) HandleMessage(client mqtt.Client, msg mqtt.Mes
 // ResubscribeAll resubscribes to all topics after a reconnection
 func (s *SubscriptionManagerImpl) ResubscribeAll() error {
     s.mu.RLock()
-    needsSubscribe := !s.subscribed && len(s.topics) > 0
-    topics := make([]string, len(s.topics))
-    copy(topics, s.topics)
+    currentTopics := make([]string, len(s.topics))
+    copy(currentTopics, s.topics)
     s.mu.RUnlock()
 
-    if needsSubscribe {
-        return s.Subscribe(topics)
+    if len(currentTopics) == 0 {
+        s.broker.logger.Debug("no topics to resubscribe")
+        return nil
     }
+
+    s.broker.logger.Info("resubscribing to topics", 
+        "topicCount", len(currentTopics))
+
+    // First unsubscribe from any existing subscriptions to ensure clean state
+    if s.subscribed {
+        s.broker.logger.Debug("cleaning up existing subscriptions")
+        for _, topic := range currentTopics {
+            if token := s.conn.GetClient().Unsubscribe(topic); token.Wait() && token.Error() != nil {
+                s.broker.logger.Error("failed to unsubscribe during resubscription",
+                    "topic", topic,
+                    "error", token.Error())
+            }
+        }
+    }
+
+    // Resubscribe to all topics
+    for _, topic := range currentTopics {
+        if err := s.subscribeTopic(topic); err != nil {
+            s.broker.logger.Error("failed to resubscribe to topic",
+                "topic", topic,
+                "error", err)
+            return fmt.Errorf("failed to resubscribe to topic %s: %w", topic, err)
+        }
+        s.broker.logger.Debug("resubscribed to topic", "topic", topic)
+    }
+
+    s.mu.Lock()
+    s.subscribed = true
+    s.mu.Unlock()
+
+    s.broker.logger.Info("successfully resubscribed to all topics",
+        "topicCount", len(currentTopics))
+
     return nil
 }
 

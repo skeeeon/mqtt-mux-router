@@ -25,6 +25,9 @@ type MQTTBroker struct {
     sub  SubscriptionManager
     pub  Publisher
 
+    // Store rules for reconnection
+    rules []rule.Rule
+    
     mu sync.RWMutex
     wg sync.WaitGroup
 }
@@ -74,6 +77,12 @@ func NewBroker(cfg *config.Config, log *logger.Logger, brokerCfg BrokerConfig, m
 
 // Start implements broker.Broker interface
 func (b *MQTTBroker) Start(ctx context.Context, rules []rule.Rule) error {
+    b.mu.Lock()
+    // Store rules for reconnection
+    b.rules = make([]rule.Rule, len(rules))
+    copy(b.rules, rules)
+    b.mu.Unlock()
+
     if err := b.processor.LoadRules(rules); err != nil {
         return fmt.Errorf("failed to load rules: %w", err)
     }
@@ -91,6 +100,29 @@ func (b *MQTTBroker) Start(ctx context.Context, rules []rule.Rule) error {
 
     if err := b.sub.Subscribe(topicList); err != nil {
         return fmt.Errorf("failed to subscribe to topics: %w", err)
+    }
+
+    if b.metrics != nil {
+        b.metrics.SetRulesActive(float64(len(rules)))
+    }
+
+    return nil
+}
+
+// RestoreRules reloads rules after reconnection
+func (b *MQTTBroker) RestoreRules() error {
+    b.mu.RLock()
+    rules := make([]rule.Rule, len(b.rules))
+    copy(rules, b.rules)
+    b.mu.RUnlock()
+
+    b.logger.Info("restoring rules after reconnection", 
+        "ruleCount", len(rules))
+
+    if err := b.processor.LoadRules(rules); err != nil {
+        b.logger.Error("failed to restore rules after reconnection",
+            "error", err)
+        return fmt.Errorf("failed to restore rules: %w", err)
     }
 
     if b.metrics != nil {

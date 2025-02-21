@@ -32,7 +32,8 @@ func NewConnectionManager(broker *MQTTBroker) (ConnectionManager, error) {
         SetUsername(broker.config.MQTT.Username).
         SetPassword(broker.config.MQTT.Password).
         SetCleanSession(true).
-        SetAutoReconnect(true)
+        SetAutoReconnect(true).
+        SetMaxReconnectInterval(time.Minute) // Prevent exponential backoff from growing too large
 
     // Set up connection handlers
     opts.OnConnect = cm.handleConnect
@@ -104,7 +105,7 @@ func (cm *ConnectionManagerImpl) GetClient() mqtt.Client {
     return cm.client
 }
 
-// handleConnect processes successful connections
+// handleConnect processes successful connections and resubscribes to topics
 func (cm *ConnectionManagerImpl) handleConnect(client mqtt.Client) {
     cm.broker.logger.Info("mqtt client connected", "broker", cm.broker.config.MQTT.Broker)
     cm.connected.Store(true)
@@ -113,6 +114,30 @@ func (cm *ConnectionManagerImpl) handleConnect(client mqtt.Client) {
     cm.broker.safeMetricsUpdate(func(m *metrics.Metrics) {
         m.SetMQTTConnectionStatus(true)
     })
+
+    // Restore rules first
+    if err := cm.broker.RestoreRules(); err != nil {
+        cm.broker.logger.Error("failed to restore rules after reconnect",
+            "error", err)
+        cm.broker.safeMetricsUpdate(func(m *metrics.Metrics) {
+            m.IncMQTTReconnects() // Track restoration failures
+        })
+        return
+    }
+    
+    // Resubscribe to topics if needed
+    if cm.broker.sub != nil {
+        if err := cm.broker.sub.ResubscribeAll(); err != nil {
+            cm.broker.logger.Error("failed to resubscribe to topics after reconnect",
+                "error", err)
+            cm.broker.safeMetricsUpdate(func(m *metrics.Metrics) {
+                m.IncMQTTReconnects() // Track resubscription failures
+            })
+            return
+        }
+        cm.broker.logger.Info("successfully restored rules and resubscribed to topics",
+            "topics", cm.broker.sub.GetSubscribedTopics())
+    }
 }
 
 // handleDisconnect processes connection loss
@@ -127,7 +152,9 @@ func (cm *ConnectionManagerImpl) handleDisconnect(client mqtt.Client, err error)
 
 // handleReconnecting processes reconnection attempts
 func (cm *ConnectionManagerImpl) handleReconnecting(client mqtt.Client, opts *mqtt.ClientOptions) {
-    cm.broker.logger.Info("mqtt client reconnecting", "broker", opts.Servers[0])
+    cm.broker.logger.Info("mqtt client reconnecting", 
+        "broker", opts.Servers[0],
+        "attempt", time.Since(cm.broker.stats.LastReconnect))
     
     cm.broker.safeMetricsUpdate(func(m *metrics.Metrics) {
         m.IncMQTTReconnects()
@@ -154,5 +181,6 @@ func (cm *ConnectionManagerImpl) newTLSConfig(certFile, keyFile, caFile string) 
     return &tls.Config{
         Certificates: []tls.Certificate{cert},
         RootCAs:     caCertPool,
+        MinVersion:  tls.VersionTLS12,
     }, nil
 }
