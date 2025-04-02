@@ -1,0 +1,31 @@
+{
+    "brokerType": "nats",
+    "nats": {
+        "urls": ["nats://localhost:4222"],
+        "clientId": "mqtt-mux-router",
+        "username": "user",
+        "password": "pass",
+        "tls": {
+            "enable": false,
+            "certFile": "certs/client-cert.pem",
+            "keyFile": "certs/client-key.pem",
+            "caFile": "certs/ca.pem"
+        }
+    },
+    "logging": {
+        "level": "info",
+        "outputPath": "stdout",
+        "encoding": "json"
+    },
+    "metrics": {
+        "enabled": true,
+        "address": ":2112",
+        "path": "/metrics",
+        "updateInterval": "15s"
+    },
+    "processing": {
+        "workers": 4,
+        "queueSize": 1000,
+        "batchSize": 100
+    }
+}

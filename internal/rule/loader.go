@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"gopkg.in/yaml.v3"
 	"mqtt-mux-router/internal/logger"
 )
 
@@ -37,7 +39,12 @@ func (l *RulesLoader) LoadFromDirectory(path string) ([]Rule, error) {
 			return fmt.Errorf("error accessing path %s: %w", path, err)
 		}
 
-		if info.IsDir() || filepath.Ext(path) != ".json" {
+		if info.IsDir() {
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".json" && ext != ".yaml" && ext != ".yml" {
 			return nil
 		}
 
@@ -52,11 +59,21 @@ func (l *RulesLoader) LoadFromDirectory(path string) ([]Rule, error) {
 		}
 
 		var ruleSet []Rule
-		if err := json.Unmarshal(data, &ruleSet); err != nil {
+		var parseErr error
+
+		// Determine parser based on file extension
+		switch ext {
+		case ".json":
+			parseErr = json.Unmarshal(data, &ruleSet)
+		case ".yaml", ".yml":
+			parseErr = yaml.Unmarshal(data, &ruleSet)
+		}
+
+		if parseErr != nil {
 			l.logger.Error("failed to parse rule file",
 				"path", path,
-				"error", err)
-			return fmt.Errorf("failed to parse rule file %s: %w", path, err)
+				"error", parseErr)
+			return fmt.Errorf("failed to parse rule file %s: %w", path, parseErr)
 		}
 
 		l.logger.Debug("successfully loaded rules",

@@ -1,0 +1,46 @@
+# MQTT Mux Router Configuration
+brokerType: mqtt  # Options: mqtt, nats
+
+# MQTT Broker Configuration
+mqtt:
+  broker: ssl://mqtt.example.com:8883
+  clientId: mqtt-mux-router
+  username: user
+  password: pass
+  tls:
+    enable: true
+    certFile: certs/client-cert.pem
+    keyFile: certs/client-key.pem
+    caFile: certs/ca.pem
+
+# NATS Configuration
+nats:
+  urls:
+    - nats://localhost:4222
+  clientId: mqtt-mux-router
+  username: user
+  password: pass
+  tls:
+    enable: false
+    certFile: certs/client-cert.pem
+    keyFile: certs/client-key.pem
+    caFile: certs/ca.pem
+
+# Logging Configuration
+logging:
+  level: info  # debug, info, warn, error
+  outputPath: stdout  # file path or "stdout"
+  encoding: json  # json or console
+
+# Metrics Configuration
+metrics:
+  enabled: true
+  address: :2112
+  path: /metrics
+  updateInterval: 15s
+
+# Processing Configuration
+processing:
+  workers: 4  # Number of worker threads
+  queueSize: 1000  # Processing queue size
+  batchSize: 100  # Message batch size

@@ -1,12 +1,14 @@
 # MQTT Mux Router
 
-A high-performance MQTT message router that processes messages from subscribed topics, evaluates conditions, and triggers actions based on configurable rules. The router is designed for reliability, performance, and easy monitoring in production environments.
+A high-performance message router that processes messages from subscribed topics, evaluates conditions, and triggers actions based on configurable rules. The router is designed for reliability, performance, and easy monitoring in production environments.
 
 ## Features
 
 - 🚀 High-performance message processing with worker pools
-- 🔐 TLS support with client certificates
-- 📝 Dynamic message templating with nested path support
+- 🔄 Multiple broker support:
+  - 🔌 MQTT broker with full TLS support
+  - 🚀 NATS broker for high-performance messaging
+- 📝 Flexible rule format with support for both YAML and JSON
 - 📋 Configurable logging with multiple outputs
 - 🔄 Automatic reconnection handling with subscription recovery
 - 🎯 Complex condition evaluation with AND/OR logic
@@ -25,7 +27,7 @@ cd mqtt-mux-router
 
 2. Copy the example configuration:
 ```bash
-cp config/config.example.json config/config.json
+cp config/config.yaml config/config.yaml
 ```
 
 3. Build the binary:
@@ -35,7 +37,7 @@ go build -o mqtt-mux-router ./cmd/mqtt-mux-router
 
 4. Start the router:
 ```bash
-./mqtt-mux-router -config config/config.json
+./mqtt-mux-router -config config/config.yaml
 ```
 
 ## Project Structure
@@ -47,16 +49,24 @@ mqtt-mux-router/
 │       └── main.go                   # Application entry point
 ├── config/
 │   ├── config.go                     # Configuration structures
-│   └── config.example.json           # Example configuration
+│   ├── config.yaml                   # Example YAML configuration
+│   └── config.json                   # Example JSON configuration
 ├── internal/
 │   ├── broker/
-|   │   │   ├── broker.go
-|   │   │   └── mqtt/
-|   │   │       ├── broker.go         
-|   │   │       ├── connection.go    
-|   │   │       ├── interfaces.go
-|   │   │       ├── publisher.go
-|   │   │       └── subscription.go
+│   │   ├── broker.go                 # Broker interface
+│   │   ├── mqtt/                     # MQTT implementation
+│   │   │   ├── broker.go         
+│   │   │   ├── connection.go    
+│   │   │   ├── interfaces.go
+│   │   │   ├── publisher.go
+│   │   │   └── subscription.go
+│   │   └── nats/                     # NATS implementation
+│   │       ├── broker.go         
+│   │       ├── connection.go    
+│   │       ├── interfaces.go
+│   │       ├── publisher.go
+│   │       ├── subscription.go
+│   │       └── utils.go
 │   ├── rule/
 │   │   ├── types.go                  # Rule data structures
 │   │   ├── processor.go              # Rule processing and worker pool
@@ -71,7 +81,8 @@ mqtt-mux-router/
 │   └── stats/
 │       └── stats.go                  # Performance metrics
 ├── rules/                            # Directory for rule files
-│   └── example.json
+│   ├── temperature.yaml              # Example YAML rules
+│   └── complex.yaml
 ├── go.mod
 └── README.md
 ```
@@ -79,53 +90,83 @@ mqtt-mux-router/
 ## Prerequisites
 
 - Go 1.21 or higher
-- MQTT Broker (e.g., Mosquitto, EMQ X)
+- MQTT Broker (e.g., Mosquitto, EMQ X) or NATS Server
 - SSL certificates (if using TLS)
 - Prometheus (optional, for metrics collection)
 
 ## Configuration
 
-The application uses a comprehensive configuration file with optional command-line overrides for operational flexibility.
+The application uses a comprehensive configuration file with optional command-line overrides for operational flexibility. Both YAML and JSON formats are supported.
 
-### Configuration File Structure
+### YAML Configuration Format
 
-```json
-{
-    "mqtt": {
-        "broker": "ssl://mqtt.example.com:8883",
-        "clientId": "mqtt-mux-router",
-        "username": "user",
-        "password": "pass",
-        "tls": {
-            "enable": true,
-            "certFile": "certs/client-cert.pem",
-            "keyFile": "certs/client-key.pem",
-            "caFile": "certs/ca.pem"
-        }
-    },
-    "logging": {
-        "level": "info",
-        "outputPath": "/var/log/mqtt-mux-router/mqtt-mux-router.log",
-        "encoding": "json"
-    },
-    "metrics": {
-        "enabled": true,
-        "address": ":2112",
-        "path": "/metrics",
-        "updateInterval": "15s"
-    },
-    "processing": {
-        "workers": 4,
-        "queueSize": 1000,
-        "batchSize": 100
-    }
-}
+```yaml
+# MQTT Mux Router Configuration
+brokerType: mqtt  # Options: mqtt, nats
+
+# MQTT Broker Configuration
+mqtt:
+  broker: ssl://mqtt.example.com:8883
+  clientId: mqtt-mux-router
+  username: user
+  password: pass
+  tls:
+    enable: true
+    certFile: certs/client-cert.pem
+    keyFile: certs/client-key.pem
+    caFile: certs/ca.pem
+
+# NATS Configuration
+nats:
+  urls:
+    - nats://localhost:4222
+  clientId: mqtt-mux-router
+  username: user
+  password: pass
+  tls:
+    enable: false
+    certFile: certs/client-cert.pem
+    keyFile: certs/client-key.pem
+    caFile: certs/ca.pem
+
+# Logging Configuration
+logging:
+  level: info  # debug, info, warn, error
+  outputPath: stdout  # file path or "stdout"
+  encoding: json  # json or console
+
+# Metrics Configuration
+metrics:
+  enabled: true
+  address: :2112
+  path: /metrics
+  updateInterval: 15s
+
+# Processing Configuration
+processing:
+  workers: 4  # Number of worker threads
+  queueSize: 1000  # Processing queue size
+  batchSize: 100  # Message batch size
 ```
 
 ### Configuration Sections
 
-#### MQTT Settings
+#### General Settings
+- `brokerType`: Broker implementation to use (`mqtt` or `nats`)
+
+#### MQTT Settings (when using MQTT broker)
 - `broker`: MQTT broker address (required)
+- `clientId`: Client identifier (required)
+- `username`: Authentication username (optional)
+- `password`: Authentication password (optional)
+- `tls`: TLS configuration
+  - `enable`: Enable TLS (true/false)
+  - `certFile`: Client certificate path
+  - `keyFile`: Client key path
+  - `caFile`: CA certificate path
+
+#### NATS Settings (when using NATS broker)
+- `urls`: NATS server URLs (array)
 - `clientId`: Client identifier (required)
 - `username`: Authentication username (optional)
 - `password`: Authentication password (optional)
@@ -158,9 +199,11 @@ Configuration options can be overridden via command line flags:
 ```bash
 Usage of mqtt-mux-router:
   -config string
-        path to config file (default "config/config.json")
+        path to config file (default "config/config.yaml")
   -rules string
         path to rules directory (default "rules")
+  -broker-type string
+        broker type (mqtt or nats)
   
   # Optional overrides
   -workers int
@@ -179,26 +222,81 @@ Usage of mqtt-mux-router:
 
 ## Rule Configuration
 
-Rules define message routing and transformation logic:
+Rules define message routing and transformation logic. Rules can be defined in either YAML or JSON format.
+
+### YAML Rule Format
+
+```yaml
+# Temperature alert rule
+- topic: sensors/temperature
+  # Only trigger for high temperatures
+  conditions:
+    operator: and
+    items:
+      - field: temperature
+        operator: gt
+        value: 30  # Trigger alert when temperature > 30
+  action:
+    topic: alerts/temperature
+    # Multi-line payload with proper JSON formatting
+    payload: |
+      {
+        "alert": "High temperature detected!",
+        "value": ${temperature},
+        "timestamp": "${uuid7()}"
+      }
+```
+
+Multiple rules can be defined in a single YAML file:
+
+```yaml
+# Low humidity alert rule
+- topic: sensors/humidity
+  conditions:
+    operator: and
+    items:
+      - field: humidity
+        operator: lt
+        value: 30
+  action:
+    topic: alerts/humidity
+    payload: '{"alert":"Low humidity detected!","value":${humidity}}'
+
+# High humidity alert rule
+- topic: sensors/humidity
+  conditions:
+    operator: and
+    items:
+      - field: humidity
+        operator: gt
+        value: 80
+  action:
+    topic: alerts/humidity
+    payload: '{"alert":"High humidity detected!","value":${humidity}}'
+```
+
+### JSON Rule Format (Still Supported)
 
 ```json
-{
-    "topic": "sensors/temperature",
-    "conditions": {
-        "operator": "and",
-        "items": [
-            {
-                "field": "temperature",
-                "operator": "gt",
-                "value": 30
-            }
-        ]
-    },
-    "action": {
-        "topic": "alerts/temperature",
-        "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature},\"message_id\":\"${uuid7()}\"}"
+[
+    {
+        "topic": "sensors/temperature",
+        "conditions": {
+            "operator": "and",
+            "items": [
+                {
+                    "field": "temperature",
+                    "operator": "gt",
+                    "value": 30
+                }
+            ]
+        },
+        "action": {
+            "topic": "alerts/temperature",
+            "payload": "{\"alert\":\"High temperature!\",\"value\":${temperature},\"message_id\":\"${uuid7()}\"}"
+        }
     }
-}
+]
 ```
 
 ### Template Functions
@@ -229,6 +327,30 @@ The router supports the following template functions:
 - `and`: All conditions must be true
 - `or`: At least one condition must be true
 
+## Broker Support
+
+The application supports multiple message broker implementations:
+
+### MQTT Broker
+
+The MQTT broker implementation supports:
+- Full TLS/SSL security
+- QoS levels 0, 1, and 2
+- Username/password authentication
+- Last Will and Testament messages
+- Automatic reconnection
+
+### NATS Broker
+
+The NATS broker implementation supports:
+- High-performance messaging
+- TLS/SSL security
+- Username/password authentication
+- Automatic reconnection
+- Server URLs list with failover
+
+When using NATS, MQTT-style topics (with `/` separators) in rules are automatically translated to NATS subjects (with `.` separators) at the broker boundary.
+
 ## Metrics
 
 The router exposes Prometheus metrics for monitoring system health and performance when metrics are enabled.
@@ -244,7 +366,7 @@ The router exposes Prometheus metrics for monitoring system health and performan
 - `rule_matches_total` (counter) - Total number of rule matches
 - `rules_active` (gauge) - Current number of active rules
 
-3. MQTT Connection:
+3. Broker Connection:
 - `mqtt_connection_status` (gauge) - Current connection status (0/1)
 - `mqtt_reconnects_total` (counter) - Total number of reconnection attempts
 

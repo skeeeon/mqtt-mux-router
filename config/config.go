@@ -4,47 +4,66 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	MQTT       MQTTConfig    `json:"mqtt"`
-	Logging    LogConfig     `json:"logging"`
-	Metrics    MetricsConfig `json:"metrics"`
-	Processing ProcConfig    `json:"processing"`
+	BrokerType string        `json:"brokerType" yaml:"brokerType"` // "mqtt" or "nats"
+	MQTT       MQTTConfig    `json:"mqtt" yaml:"mqtt"`
+	NATS       NATSConfig    `json:"nats" yaml:"nats"`
+	Logging    LogConfig     `json:"logging" yaml:"logging"`
+	Metrics    MetricsConfig `json:"metrics" yaml:"metrics"`
+	Processing ProcConfig    `json:"processing" yaml:"processing"`
 }
 
 type MQTTConfig struct {
-	Broker   string `json:"broker"`
-	ClientID string `json:"clientId"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Broker   string `json:"broker" yaml:"broker"`
+	ClientID string `json:"clientId" yaml:"clientId"`
+	Username string `json:"username" yaml:"username"`
+	Password string `json:"password" yaml:"password"`
 	TLS      struct {
-		Enable   bool   `json:"enable"`
-		CertFile string `json:"certFile"`
-		KeyFile  string `json:"keyFile"`
-		CAFile   string `json:"caFile"`
-	} `json:"tls"`
+		Enable   bool   `json:"enable" yaml:"enable"`
+		CertFile string `json:"certFile" yaml:"certFile"`
+		KeyFile  string `json:"keyFile" yaml:"keyFile"`
+		CAFile   string `json:"caFile" yaml:"caFile"`
+	} `json:"tls" yaml:"tls"`
+}
+
+type NATSConfig struct {
+	URLs     []string `json:"urls" yaml:"urls"`
+	ClientID string   `json:"clientId" yaml:"clientId"`
+	Username string   `json:"username" yaml:"username"`
+	Password string   `json:"password" yaml:"password"`
+	TLS      struct {
+		Enable   bool   `json:"enable" yaml:"enable"`
+		CertFile string `json:"certFile" yaml:"certFile"`
+		KeyFile  string `json:"keyFile" yaml:"keyFile"`
+		CAFile   string `json:"caFile" yaml:"caFile"`
+	} `json:"tls" yaml:"tls"`
 }
 
 type LogConfig struct {
-	Level      string `json:"level"`      // debug, info, warn, error
-	OutputPath string `json:"outputPath"` // file path or "stdout"
-	Encoding   string `json:"encoding"`   // json or console
+	Level      string `json:"level" yaml:"level"`           // debug, info, warn, error
+	OutputPath string `json:"outputPath" yaml:"outputPath"` // file path or "stdout"
+	Encoding   string `json:"encoding" yaml:"encoding"`     // json or console
 }
 
 type MetricsConfig struct {
-	Enabled        bool   `json:"enabled"`
-	Address        string `json:"address"`
-	Path           string `json:"path"`
-	UpdateInterval string `json:"updateInterval"` // Duration string
+	Enabled        bool   `json:"enabled" yaml:"enabled"`
+	Address        string `json:"address" yaml:"address"`
+	Path           string `json:"path" yaml:"path"`
+	UpdateInterval string `json:"updateInterval" yaml:"updateInterval"` // Duration string
 }
 
 type ProcConfig struct {
-	Workers    int `json:"workers"`
-	QueueSize  int `json:"queueSize"`
-	BatchSize  int `json:"batchSize"`
+	Workers    int `json:"workers" yaml:"workers"`
+	QueueSize  int `json:"queueSize" yaml:"queueSize"`
+	BatchSize  int `json:"batchSize" yaml:"batchSize"`
 }
 
 // Load reads and parses the configuration file
@@ -55,8 +74,36 @@ func Load(path string) (*Config, error) {
 	}
 
 	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	
+	// Determine file type by extension
+	ext := strings.ToLower(filepath.Ext(path))
+	var parseErr error
+	
+	switch ext {
+	case ".yaml", ".yml":
+		parseErr = yaml.Unmarshal(data, &config)
+	case ".json":
+		parseErr = json.Unmarshal(data, &config)
+	default:
+		// Try JSON first, then YAML if JSON fails
+		parseErr = json.Unmarshal(data, &config)
+		if parseErr != nil {
+			yamlErr := yaml.Unmarshal(data, &config)
+			if yamlErr != nil {
+				return nil, fmt.Errorf("failed to parse config file (tried JSON and YAML): %w", parseErr)
+			}
+			// YAML parsing succeeded
+			parseErr = nil
+		}
+	}
+	
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", parseErr)
+	}
+
+	// Set default broker type if not specified
+	if config.BrokerType == "" {
+		config.BrokerType = "mqtt" // Default to MQTT for backward compatibility
 	}
 
 	// Set defaults for logging
@@ -102,22 +149,46 @@ func Load(path string) (*Config, error) {
 
 // validateConfig performs validation of all configuration values
 func validateConfig(cfg *Config) error {
-	// Validate MQTT config
-	if cfg.MQTT.Broker == "" {
-		return fmt.Errorf("mqtt broker address is required")
-	}
+	// Validate based on broker type
+	switch cfg.BrokerType {
+	case "mqtt":
+		// Validate MQTT config
+		if cfg.MQTT.Broker == "" {
+			return fmt.Errorf("mqtt broker address is required")
+		}
 
-	// Validate TLS config if enabled
-	if cfg.MQTT.TLS.Enable {
-		if cfg.MQTT.TLS.CertFile == "" {
-			return fmt.Errorf("tls cert file is required when tls is enabled")
+		// Validate MQTT TLS config if enabled
+		if cfg.MQTT.TLS.Enable {
+			if cfg.MQTT.TLS.CertFile == "" {
+				return fmt.Errorf("tls cert file is required when tls is enabled")
+			}
+			if cfg.MQTT.TLS.KeyFile == "" {
+				return fmt.Errorf("tls key file is required when tls is enabled")
+			}
+			if cfg.MQTT.TLS.CAFile == "" {
+				return fmt.Errorf("tls ca file is required when tls is enabled")
+			}
 		}
-		if cfg.MQTT.TLS.KeyFile == "" {
-			return fmt.Errorf("tls key file is required when tls is enabled")
+	case "nats":
+		// Validate NATS config
+		if len(cfg.NATS.URLs) == 0 {
+			return fmt.Errorf("at least one nats server URL is required")
 		}
-		if cfg.MQTT.TLS.CAFile == "" {
-			return fmt.Errorf("tls ca file is required when tls is enabled")
+
+		// Validate NATS TLS config if enabled
+		if cfg.NATS.TLS.Enable {
+			if cfg.NATS.TLS.CertFile == "" {
+				return fmt.Errorf("tls cert file is required when tls is enabled")
+			}
+			if cfg.NATS.TLS.KeyFile == "" {
+				return fmt.Errorf("tls key file is required when tls is enabled")
+			}
+			if cfg.NATS.TLS.CAFile == "" {
+				return fmt.Errorf("tls ca file is required when tls is enabled")
+			}
 		}
+	default:
+		return fmt.Errorf("unsupported broker type: %s", cfg.BrokerType)
 	}
 
 	// Validate logging config
@@ -155,7 +226,11 @@ func validateConfig(cfg *Config) error {
 }
 
 // ApplyOverrides applies command line flag overrides to the configuration
-func (c *Config) ApplyOverrides(workers, queueSize, batchSize int, metricsAddr, metricsPath string, metricsInterval time.Duration) {
+func (c *Config) ApplyOverrides(brokerType string, workers, queueSize, batchSize int, metricsAddr, metricsPath string, metricsInterval time.Duration) {
+	if brokerType != "" {
+		c.BrokerType = brokerType
+	}
+	
 	if workers > 0 {
 		c.Processing.Workers = workers
 	}

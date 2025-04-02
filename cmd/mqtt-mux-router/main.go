@@ -14,8 +14,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"mqtt-mux-router/config"
-	"mqtt-mux-router/internal/broker"   // Used for the Broker interface
+	"mqtt-mux-router/internal/broker"
 	"mqtt-mux-router/internal/broker/mqtt"
+	"mqtt-mux-router/internal/broker/nats"
 	"mqtt-mux-router/internal/logger"
 	"mqtt-mux-router/internal/metrics"
 	"mqtt-mux-router/internal/rule"
@@ -23,8 +24,11 @@ import (
 
 func main() {
 	// Command line flags for config and rules
-	configPath := flag.String("config", "config/config.json", "path to config file")
+	configPath := flag.String("config", "config/config.yaml", "path to config file (YAML or JSON)")
 	rulesPath := flag.String("rules", "rules", "path to rules directory")
+
+	// Add broker type flag
+	brokerTypeFlag := flag.String("broker-type", "", "broker type (mqtt or nats)")
 
 	// Optional override flags
 	workersOverride := flag.Int("workers", 0, "override number of worker threads (0 = use config)")
@@ -44,6 +48,7 @@ func main() {
 
 	// Apply any command line overrides
 	cfg.ApplyOverrides(
+		*brokerTypeFlag,
 		*workersOverride,
 		*queueSizeOverride,
 		*batchSizeOverride,
@@ -113,13 +118,31 @@ func main() {
 	// Create broker with processing configuration
 	brokerCfg := mqtt.BrokerConfig{
 		ProcessorWorkers: cfg.Processing.Workers,
-		QueueSize:       cfg.Processing.QueueSize,
-		BatchSize:       cfg.Processing.BatchSize,
+		QueueSize:        cfg.Processing.QueueSize,
+		BatchSize:        cfg.Processing.BatchSize,
 	}
 
-	// Create the MQTT broker, but declare it as the broker interface type
+	// NATS broker uses same config structure
+	natsBrokerCfg := nats.BrokerConfig{
+		ProcessorWorkers: cfg.Processing.Workers,
+		QueueSize:        cfg.Processing.QueueSize,
+		BatchSize:        cfg.Processing.BatchSize,
+	}
+
+	// Create the broker based on configuration
 	var messageBroker broker.Broker
-	messageBroker, err = mqtt.NewBroker(cfg, logger, brokerCfg, metricsService)
+	
+	switch cfg.BrokerType {
+	case "mqtt":
+		logger.Info("creating MQTT broker")
+		messageBroker, err = mqtt.NewBroker(cfg, logger, brokerCfg, metricsService)
+	case "nats":
+		logger.Info("creating NATS broker")
+		messageBroker, err = nats.NewBroker(cfg, logger, natsBrokerCfg, metricsService)
+	default:
+		logger.Fatal("unsupported broker type", "type", cfg.BrokerType)
+	}
+	
 	if err != nil {
 		logger.Fatal("failed to create broker", "error", err)
 	}
@@ -140,7 +163,8 @@ func main() {
 		logger.Fatal("failed to start broker", "error", err)
 	}
 
-	logger.Info("mqtt-mux-router started",
+	logger.Info("message router started",
+		"brokerType", cfg.BrokerType,
 		"workers", cfg.Processing.Workers,
 		"queueSize", cfg.Processing.QueueSize,
 		"batchSize", cfg.Processing.BatchSize,

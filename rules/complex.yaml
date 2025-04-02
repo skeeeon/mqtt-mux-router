@@ -1,0 +1,46 @@
+# Complex rule with nested conditions
+- topic: sensors/environment
+  conditions:
+    # Main AND condition group
+    operator: and
+    items:
+      # Status must be "active"
+      - field: status
+        operator: eq
+        value: active
+    # Sub groups of conditions
+    groups:
+      # Either temperature is too high OR humidity conditions are bad
+      - operator: or
+        items:
+          # High temperature condition
+          - field: temperature
+            operator: gt
+            value: 32
+        # Humidity sub-group
+        groups:
+          # Both high humidity AND low pressure (storm conditions)
+          - operator: and
+            items:
+              - field: humidity
+                operator: gt
+                value: 85
+              - field: pressure
+                operator: lt
+                value: 990
+  # Action to take when conditions are met
+  action:
+    topic: alerts/environment
+    # Complex JSON payload with multiple fields
+    payload: |
+      {
+        "alert": "Environmental conditions critical!",
+        "conditions": {
+          "temperature": ${temperature},
+          "humidity": ${humidity},
+          "pressure": ${pressure}
+        },
+        "deviceId": "${deviceId}",
+        "timestamp": "${uuid7()}",
+        "severity": "high"
+      }

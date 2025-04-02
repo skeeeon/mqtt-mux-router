@@ -1,0 +1,18 @@
+# Temperature alert rule
+- topic: sensors/temperature
+  # Only trigger for high temperatures
+  conditions:
+    operator: and
+    items:
+      - field: temperature
+        operator: gt
+        value: 30  # Trigger alert when temperature > 30
+  action:
+    topic: alerts/temperature
+    # Multi-line payload with proper JSON formatting
+    payload: |
+      {
+        "alert": "High temperature detected!",
+        "value": ${temperature},
+        "timestamp": "${uuid7()}"
+      }
